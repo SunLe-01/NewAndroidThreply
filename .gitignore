@@ -1,0 +1,21 @@
+.gradle/
+.gradle-user-home/
+.idea/
+local.properties
+/build/
+**/build/
+
+# Native build
+**/.cxx/
+
+# Kotlin
+*.class
+*.jar
+
+# Android
+*.apk
+*.ap_*.dex
+*.dex
+
+# Logs
+*.log

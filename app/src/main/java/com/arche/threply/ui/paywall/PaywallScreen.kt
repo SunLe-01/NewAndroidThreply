@@ -1,0 +1,579 @@
+package com.arche.threply.ui.paywall
+
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.*
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.arche.threply.billing.BillingManager
+import com.arche.threply.billing.PricingOption
+import com.arche.threply.ui.theme.ThreplyColors
+
+/**
+ * Paywall screen with pricing options.
+ * Equivalent to iOS PaywallView.
+ */
+private enum class PaywallStage {
+    Plans,
+    Checkout
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun PaywallScreen(onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val billingManager = remember { BillingManager.getInstance(context) }
+    var selectedOptionId by remember { mutableStateOf(PricingOption.defaultOptions[1].id) }
+    val pagerState = rememberPagerState(pageCount = { 3 })
+    var currentStage by remember { mutableStateOf(PaywallStage.Plans) }
+
+    val isLoadingProducts by billingManager.isLoadingProducts.collectAsState()
+    val isProcessingPurchase by billingManager.isProcessingPurchase.collectAsState()
+    val lastErrorMessage by billingManager.lastErrorMessage.collectAsState()
+    val entitledIds by billingManager.entitledProductIds.collectAsState()
+
+    val selectedOption = PricingOption.defaultOptions.find { it.id == selectedOptionId }
+        ?: PricingOption.defaultOptions[0]
+    val isSelectedEntitled = entitledIds.contains(selectedOption.productId)
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(
+                Brush.linearGradient(
+                    colors = listOf(Color.Black, Color(0xFF0D0D1E))
+                )
+            )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(bottom = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(20.dp)
+        ) {
+            // ─── Header ───
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (currentStage == PaywallStage.Plans) {
+                    TextButton(onClick = {
+                        billingManager.restorePurchases()
+                    }) {
+                        Text("Restore", color = Color.White, fontSize = 14.sp)
+                    }
+                } else {
+                    IconButton(onClick = { currentStage = PaywallStage.Plans }) {
+                        Icon(
+                            Icons.Filled.ArrowBack,
+                            contentDescription = "返回",
+                            tint = Color.White.copy(alpha = 0.8f)
+                        )
+                    }
+                }
+
+                Text(
+                    text = if (currentStage == PaywallStage.Plans) "Threply Pro" else "确认支付",
+                    fontSize = 14.sp,
+                    color = Color.White.copy(alpha = 0.8f)
+                )
+
+                IconButton(onClick = onDismiss) {
+                    Icon(
+                        Icons.Filled.Cancel,
+                        contentDescription = "关闭",
+                        tint = Color.White.copy(alpha = 0.8f)
+                    )
+                }
+            }
+
+            AnimatedContent(
+                targetState = currentStage,
+                transitionSpec = { fadeIn() togetherWith fadeOut() },
+                label = "paywallStage"
+            ) { stage ->
+                when (stage) {
+                    PaywallStage.Plans -> {
+                        PlanSelectionContent(
+                            pagerState = pagerState,
+                            isLoadingProducts = isLoadingProducts,
+                            isProcessingPurchase = isProcessingPurchase,
+                            isSelectedEntitled = isSelectedEntitled,
+                            selectedOptionId = selectedOptionId,
+                            entitledIds = entitledIds,
+                            onSelectOption = { selectedOptionId = it },
+                            onContinue = { currentStage = PaywallStage.Checkout },
+                            displayPrice = { billingManager.displayPrice(it) }
+                        )
+                    }
+                    PaywallStage.Checkout -> {
+                        CheckoutStageContent(
+                            selectedOption = selectedOption,
+                            selectedPrice = billingManager.displayPrice(selectedOption),
+                            onSubmit = {
+                                val activity = context.findPaywallActivity()
+                                if (activity != null) {
+                                    billingManager.purchase(activity, selectedOption)
+                                }
+                            },
+                            onBack = { currentStage = PaywallStage.Plans }
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    // Auto-dismiss after successful purchase
+    LaunchedEffect(entitledIds) {
+        if (entitledIds.contains(selectedOption.productId)) {
+            com.arche.threply.data.PrefsManager.setProEntitled(context, true)
+            onDismiss()
+        }
+    }
+
+    // Error dialog
+    if (lastErrorMessage != null) {
+        AlertDialog(
+            onDismissRequest = { billingManager.clearError() },
+            title = { Text("购买失败") },
+            text = { Text(lastErrorMessage ?: "") },
+            confirmButton = {
+                TextButton(onClick = { billingManager.clearError() }) {
+                    Text("好")
+                }
+            }
+        )
+    }
+
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun PlanSelectionContent(
+    pagerState: androidx.compose.foundation.pager.PagerState,
+    isLoadingProducts: Boolean,
+    isProcessingPurchase: Boolean,
+    isSelectedEntitled: Boolean,
+    selectedOptionId: String,
+    entitledIds: Set<String>,
+    onSelectOption: (String) -> Unit,
+    onContinue: () -> Unit,
+    displayPrice: (PricingOption) -> String
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(20.dp)
+    ) {
+        // ─── Hero Carousel ───
+        HorizontalPager(
+            state = pagerState,
+            contentPadding = PaddingValues(horizontal = 18.dp),
+            pageSpacing = 12.dp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(320.dp)
+        ) { page ->
+            val shape = RoundedCornerShape(28.dp)
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(shape)
+                    .background(Color.White.copy(alpha = 0.08f))
+                    .border(1.dp, Color.White.copy(alpha = 0.18f), shape)
+                    .padding(24.dp)
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(
+                            text = "不限飞行次数",
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color.White
+                        )
+                        Text(
+                            text = "支持云端 OCR 与三条智能建议，专注力与效率齐飞。",
+                            fontSize = 14.sp,
+                            color = Color.White.copy(alpha = 0.75f)
+                        )
+                    }
+
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Filled.FlightTakeoff,
+                            null,
+                            tint = Color.White.copy(alpha = 0.6f),
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = "预留素材 ${page + 1}",
+                            fontSize = 12.sp,
+                            color = Color.White.copy(alpha = 0.6f)
+                        )
+                    }
+                }
+            }
+        }
+
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            repeat(3) { index ->
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (index == pagerState.currentPage) Color.White
+                            else Color.White.copy(alpha = 0.25f)
+                        )
+                )
+            }
+        }
+
+        Text(
+            text = "Unlimited Flights",
+            fontSize = 22.sp,
+            fontWeight = FontWeight.Bold,
+            color = Color.White
+        )
+
+        Text(
+            text = "Threply 会员解锁全量次数、三条候选、深度历史上下文与快捷指令一键链路。",
+            fontSize = 14.sp,
+            color = Color.White.copy(alpha = 0.75f),
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(horizontal = 24.dp)
+        )
+
+        if (isLoadingProducts) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    strokeWidth = 2.dp,
+                    color = Color.White.copy(alpha = 0.8f)
+                )
+                Text("正在加载价格...", fontSize = 12.sp, color = Color.White.copy(alpha = 0.6f))
+            }
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            PricingOption.defaultOptions.forEach { option ->
+                PricingOptionCard(
+                    option = option,
+                    priceText = displayPrice(option),
+                    isSelected = option.id == selectedOptionId,
+                    isEntitled = entitledIds.contains(option.productId),
+                    onClick = { onSelectOption(option.id) }
+                )
+            }
+        }
+
+        val ctaScale by animateFloatAsState(
+            targetValue = 1f,
+            animationSpec = spring(dampingRatio = 0.9f, stiffness = 300f),
+            label = "paywallContinueScale"
+        )
+        val ctaShape = RoundedCornerShape(16.dp)
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 18.dp)
+                .scale(ctaScale)
+                .shadow(14.dp, ctaShape, ambientColor = Color.Black.copy(alpha = 0.3f))
+                .clip(ctaShape)
+                .background(ThreplyColors.glassSurfaceElevated)
+                .border(1.dp, Color.White.copy(alpha = 0.28f), ctaShape)
+                .clickable(
+                    enabled = !isProcessingPurchase && !isLoadingProducts && !isSelectedEntitled,
+                    onClick = onContinue
+                )
+                .padding(16.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = if (isSelectedEntitled) "已解锁" else "继续",
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = Color.White
+            )
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 22.dp),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text("Privacy | Terms", fontSize = 12.sp, color = Color.White.copy(alpha = 0.55f))
+            Text("可随时取消订阅", fontSize = 12.sp, color = Color.White.copy(alpha = 0.55f))
+        }
+    }
+}
+
+@Composable
+private fun CheckoutStageContent(
+    selectedOption: PricingOption,
+    selectedPrice: String,
+    onSubmit: () -> Unit,
+    onBack: () -> Unit
+) {
+    val cardShape = RoundedCornerShape(24.dp)
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 18.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Text(
+            text = "确认你选择的方案与支付方式。当前先接通页面框架，后续再替换成真实 Google Play 购买。",
+            fontSize = 14.sp,
+            color = Color.White.copy(alpha = 0.72f),
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        Surface(
+            color = Color.White.copy(alpha = 0.08f),
+            shape = cardShape,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier.padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text("订单信息", color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp)
+                Text(selectedOption.name, color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                Text(selectedPrice, color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.ExtraBold)
+                Text(
+                    text = selectedOption.subtitle,
+                    color = Color.White.copy(alpha = 0.68f),
+                    fontSize = 13.sp
+                )
+            }
+        }
+
+        Surface(
+            color = ThreplyColors.glassSurface,
+            shape = cardShape,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier.padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(42.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(Color.White.copy(alpha = 0.12f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Filled.AccountBalanceWallet,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text("Google Play 支付", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                        Text("演示模式，不发起真实扣款", color = Color.White.copy(alpha = 0.6f), fontSize = 12.sp)
+                    }
+                }
+
+                HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
+
+                Text("你将看到的真实流程", color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp)
+                Text("1. 拉起 Google Play 购买弹层", color = Color.White, fontSize = 14.sp)
+                Text("2. 确认订阅周期与付款方式", color = Color.White, fontSize = 14.sp)
+                Text("3. 支付结果回传主 App 与键盘侧状态", color = Color.White, fontSize = 14.sp)
+            }
+        }
+
+        Surface(
+            color = Color(0x1AF5C451),
+            shape = RoundedCornerShape(18.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                text = "当前版本只补支付页面框架，不会真实购买，也不会把你标记为 Pro。",
+                color = Color.White.copy(alpha = 0.82f),
+                fontSize = 13.sp,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)
+            )
+        }
+
+        Button(
+            onClick = onSubmit,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = Color.White,
+                contentColor = Color.Black
+            ),
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(54.dp)
+        ) {
+            Text("确认支付", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        }
+
+        OutlinedButton(
+            onClick = onBack,
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.28f)),
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Text("返回修改方案")
+        }
+    }
+}
+
+// ─── Pricing Option Card ───
+
+@Composable
+private fun PricingOptionCard(
+    option: PricingOption,
+    priceText: String,
+    isSelected: Boolean,
+    isEntitled: Boolean,
+    onClick: () -> Unit
+) {
+    val scale by animateFloatAsState(
+        targetValue = if (isSelected) 1.04f else 1f,
+        animationSpec = spring(dampingRatio = 0.85f, stiffness = 300f),
+        label = "cardScale"
+    )
+
+    val shape = RoundedCornerShape(18.dp)
+
+    Column(
+        modifier = Modifier
+            .width(160.dp)
+            .scale(scale)
+            .shadow(14.dp, shape, ambientColor = Color.Black.copy(alpha = 0.25f))
+            .clip(shape)
+            .background(ThreplyColors.glassSurface)
+            .border(
+                width = if (isSelected) 2.dp else 1.dp,
+                color = if (isSelected) ThreplyColors.accent else Color.White.copy(alpha = 0.24f),
+                shape = shape
+            )
+            .clickable(onClick = onClick)
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+        horizontalAlignment = Alignment.Start
+    ) {
+        // Badge
+        if (isEntitled) {
+            Surface(
+                color = ThreplyColors.green,
+                shape = RoundedCornerShape(50),
+                modifier = Modifier.wrapContentSize()
+            ) {
+                Text(
+                    text = "已解锁",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.Black,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                )
+            }
+        } else if (option.badgeText != null) {
+            Surface(
+                color = option.badgeColor,
+                shape = RoundedCornerShape(50),
+                modifier = Modifier.wrapContentSize()
+            ) {
+                Text(
+                    text = option.badgeText,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.Black,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                )
+            }
+        }
+
+        Text(
+            text = option.name,
+            fontSize = 17.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = Color.White
+        )
+
+        Text(
+            text = priceText,
+            fontSize = 19.sp,
+            fontWeight = FontWeight.Bold,
+            color = Color.White
+        )
+
+        Text(
+            text = option.subtitle,
+            fontSize = 12.sp,
+            color = Color.White.copy(alpha = 0.7f)
+        )
+    }
+}
+
+private tailrec fun Context.findPaywallActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findPaywallActivity()
+    else -> null
+}
