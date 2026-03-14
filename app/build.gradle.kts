@@ -3,7 +3,7 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-val rimeAssetsSourceDir = rootProject.projectDir.resolve("../threply/ThreplyKeyboard/RimeResources")
+val rimeAssetsSourceDir = rootProject.projectDir.resolve("../threply/threply/ThreplyKeyboard/RimeResources")
 val generatedRimeAssetsDir = layout.buildDirectory.dir("generated/rimeAssets")
 
 val syncRimeAssets by tasks.registering(Copy::class) {
