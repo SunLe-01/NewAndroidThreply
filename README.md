@@ -1,53 +1,129 @@
 # Threply Android
 
-Threply Android 是一款集成 AI 功能的中文/英文输入法项目，包含自定义软键盘、拼音候选、Rime 引擎（可选）以及基于网络的 AI 建议与文本处理能力。
+Threply Android 是一个包含主 App 与自定义输入法服务的 Android 项目。当前版本已经具备英文键盘、拼音输入、候选词栏、AI 回复/风格/翻译面板、文本技能栏以及聊天扫描入口，但与 iOS 端相比仍有一部分底层能力和交互细节待补齐。
 
-## 功能概览
+## 当前已实现
 
-- **自定义软键盘**：支持英文与符号输入、Shift 大小写、退格、回车等操作。
-- **中英文切换**：内置拼音输入与候选展示。
-- **Rime 引擎集成（可选）**：可使用原生 Rime 引擎，失败时自动回退到内置词库。
-- **AI 建议面板**：支持生成候选回复、改写/润色等模式。
-- **聊天内容扫描（辅助）**：配合辅助功能服务获取聊天内容并生成建议。
+- 自定义输入法服务 `ThreplyInputMethodService`
+- 英文 / 拼音 / 符号三类输入路径
+- Shift 大小写、退格长按连删、动态回车标签、中英切换
+- 拼音合成文本写入宿主输入框 `setComposingText()`
+- 横向候选词栏 + 候选展开面板 + 首项高亮
+- fallback 拼音词库（当前约 483 个拼音条目）
+- 可选 Native Rime 桥接、Schema 配置、Rime 资源同步任务
+- 底栏 `AI` 按钮打开 AI Overlay
+- B 模式：3 条 AI 回复建议、流式预览、点击直接插入
+- C 模式：2D 拖拽风格板，调节回复长度与语气温度
+- 翻译模式：源语言 / 目标语言选择与翻译请求
+- 候选栏 `/` 技能栏：翻译、替换、润色
+- 选中文本时自动弹出技能栏
+- Replace / Polish 一步撤销
+- 聊天扫描入口，联动辅助功能服务读取聊天内容
+- 主 App 内置 Billing / Paywall 页面与 `threply://paywall` Deep Link
 
-## 快速开始
+## 当前已知限制
 
-### 1. 构建项目
+- Native Rime 仍未形成完整可交付链路：当前 CMake 会在缺少 `libRime.so` 时退回 stub 版 JNI，稳定可用路径仍主要依赖 fallback 词库。
+- B 模式回复树尚未真正闭环：长按扩展相关代码已接入，但 Android 端还没完全达到 iOS 的多层回复树体验。
+- IME 内 Pro 门控还没接入：键盘侧 AI 权限目前仍是放开状态。
+- 中文标点全角映射、双空格句号、Caps Lock、长按次选字符仍未完成。
+- `HapticsUtil` 已存在，但键盘主路径尚未全面接通触觉反馈。
+
+当前优先级任务见 [KEYBOARD_TODO_PRIORITY.md](KEYBOARD_TODO_PRIORITY.md)。
+
+## 主要文档
+
+- [B_MODE_USAGE_GUIDE.md](B_MODE_USAGE_GUIDE.md)
+- [B_MODE_QUICK_START.md](B_MODE_QUICK_START.md)
+- [KEYBOARD_DEBUG_GUIDE.md](KEYBOARD_DEBUG_GUIDE.md)
+- [KEYBOARD_FEATURE_COMPARISON.md](KEYBOARD_FEATURE_COMPARISON.md)
+- [KEYBOARD_TODO_PRIORITY.md](KEYBOARD_TODO_PRIORITY.md)
+- [TRANSLATE_FEATURE_GUIDE.md](TRANSLATE_FEATURE_GUIDE.md)
+- [TRANSLATE_QUICK_START.md](TRANSLATE_QUICK_START.md)
+- [T14_REPLY_TREE_IMPLEMENTATION.md](T14_REPLY_TREE_IMPLEMENTATION.md)
+
+## 构建环境
+
+- Android Studio 最新稳定版
+- JDK 17
+- Android SDK 34
+- `minSdk = 26`
+
+## 构建说明
+
+### 1. 构建 APK
 
 在项目根目录执行：
 
 ```bash
-gradlew clean
-gradlew assembleDebug
+./gradlew assembleDebug
 ```
 
-### 2. 安装与运行
+Windows:
 
-1. 使用 Android Studio 运行或通过 `adb install` 安装 APK。
-2. 打开系统设置 → 语言和输入法 → 虚拟键盘。
-3. 启用 **Threply** 键盘。
-4. 在输入框中切换到 **Threply** 键盘进行测试。
+```powershell
+.\gradlew.bat assembleDebug
+```
 
-### 3. 常见调试
+### 2. Rime 资源同步说明
 
-请参考 [KEYBOARD_DEBUG_GUIDE.md](KEYBOARD_DEBUG_GUIDE.md)。
+构建前会执行 `syncRimeAssets`，默认从相邻目录读取：
+
+```text
+../threply/threply/ThreplyKeyboard/RimeResources
+```
+
+也就是当前 Android 仓库默认会复用 iOS 项目的 Rime 资源文件。  
+如果该目录不存在，项目仍可编译，但 Native Rime 能力不会完整可用，实际输入会主要依赖 fallback 词库。
+
+### 3. 安装与启用输入法
+
+1. 安装 APK
+2. 打开主 App 完成基础配置
+3. 进入系统设置 -> 语言和输入法 -> 虚拟键盘
+4. 启用 `Threply`
+5. 在任意输入框中切换到 `Threply` 键盘
+
+## AI 功能启用说明
+
+AI 能力当前依赖以下任一条件：
+
+- 在主 App 中配置 DeepSeek API Key
+- 或接通后端登录 / 会话能力
+
+如果未配置，键盘中的 AI 请求通常不会返回有效结果。
+
+## 聊天扫描说明
+
+聊天扫描依赖以下组件：
+
+- `ChatScanAccessibilityService`
+- `ScreenshotMonitorService`
+
+如果需要从聊天界面读取上下文并生成建议，还需要在系统设置中手动启用对应辅助功能服务。
 
 ## 项目结构
 
-- `app/src/main/java/com/arche/threply/ime/`：输入法核心逻辑
-- `app/src/main/java/com/arche/threply/ime/compose/`：Compose AI 面板
-- `app/src/main/java/com/arche/threply/ime/rime/`：Rime 引擎与资源管理
-- `app/src/main/java/com/arche/threply/screenshot/`：聊天扫描与 OCR 相关功能
+- `app/src/main/java/com/arche/threply/ime/`
+  输入法核心逻辑、键盘布局、候选栏、技能栏
+- `app/src/main/java/com/arche/threply/ime/compose/`
+  AI Overlay、B/C 模式、翻译面板
+- `app/src/main/java/com/arche/threply/ime/rime/`
+  Rime 桥接、fallback 词库、资源准备逻辑
+- `app/src/main/java/com/arche/threply/screenshot/`
+  聊天扫描、截图监听、OCR 相关能力
+- `app/src/main/java/com/arche/threply/billing/`
+  Google Play Billing
+- `app/src/main/java/com/arche/threply/ui/`
+  主 App 页面、配置页、Paywall
 
-## 未来计划（Todo）
+## 调试建议
 
-- [ ] 完整的 Rime 资源打包与自动更新机制
-- [ ] AI 能力配置化（模型选择/开关/权限控制）
-- [ ] 更完善的候选词 UI 与滚动体验
-- [ ] 用户词库与学习能力
-- [ ] 端到端自动化测试与稳定性优化
-- [ ] 发布流程与版本管理（CI/CD）
+- 键盘异常优先看 [KEYBOARD_DEBUG_GUIDE.md](KEYBOARD_DEBUG_GUIDE.md)
+- AI 面板与 B 模式行为优先看 [B_MODE_USAGE_GUIDE.md](B_MODE_USAGE_GUIDE.md)
+- 当前 Android / iOS 能力差距参考 [KEYBOARD_FEATURE_COMPARISON.md](KEYBOARD_FEATURE_COMPARISON.md)
 
-## 许可与说明
+## 说明
 
-当前仓库为开发版本，部分功能依赖外部服务与设备权限，建议在测试设备上使用。
+当前仓库是开发中版本。README 以当前 Android 源码状态为准，不以 iOS 端功能为默认完成标准。
+
