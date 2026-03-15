@@ -86,7 +86,24 @@ class ThreplyInputMethodService : InputMethodService() {
     private lateinit var keyboardRoot: LinearLayout
     private lateinit var suggestionContainer: LinearLayout
     private lateinit var streamingPreviewView: TextView
+    private lateinit var composingBarView: TextView
+    private lateinit var skillBarView: View
+    private lateinit var expandedCandidatePanel: LinearLayout
     private lateinit var aiPanelView: View
+    private lateinit var aiPanelWrapper: LinearLayout
+
+    private val englishBuffer = StringBuilder()
+    private var isSkillBarVisible = false
+    private var selectionTriggeredSkillBar = false
+    private var isExpandedPanelVisible = false
+
+    private var lastSelStart = -1
+    private var lastSelEnd = -1
+    private var isSettingComposingText = false
+
+    /** Stores undo context after a Replace/Polish operation is committed. */
+    private data class UndoContext(val originalText: String, val replacedText: String, val skill: TextSkill)
+    private var pendingUndo: UndoContext? = null
 
     private val imeScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val aiCoordinator by lazy(LazyThreadSafetyMode.NONE) { AiImeCoordinator(this) }
@@ -142,9 +159,12 @@ class ThreplyInputMethodService : InputMethodService() {
         val fallbackPanel = createFallbackPanel()
         keyboardRoot.addView(fallbackPanel)
         aiPanelView = createAiPanel(fallbackPanel)
-        if (aiPanelView !== fallbackPanel) {
-            keyboardRoot.addView(aiPanelView)
+        aiPanelWrapper = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+            addView(aiPanelView)
         }
+        keyboardRoot.addView(aiPanelWrapper)
         rebuildKeyboard()
         runCatching { observeAiState() }
             .onFailure { Log.e(TAG, "Failed to observe AI state", it) }
@@ -159,7 +179,10 @@ class ThreplyInputMethodService : InputMethodService() {
         aiMode = ImeAiMode.fromRaw(PrefsManager.getImeAiMode(this))
         inputLanguage = readInputLanguage()
         pinyinComposer.clear()
+        englishBuffer.clear()
         rimeController.resetPinyinPage()
+        lastSelStart = -1
+        lastSelEnd = -1
 
         runCatching {
             if (PrefsManager.isImeRimeEnabled(this)) {
@@ -208,6 +231,60 @@ class ThreplyInputMethodService : InputMethodService() {
         rimeController.onFinishInput()
     }
 
+    override fun onUpdateSelection(
+        oldSelStart: Int, oldSelEnd: Int,
+        newSelStart: Int, newSelEnd: Int,
+        candidatesStart: Int, candidatesEnd: Int
+    ) {
+        super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd)
+
+        // Skip processing if we're the ones setting composing text
+        if (isSettingComposingText) {
+            isSettingComposingText = false
+            lastSelStart = newSelStart
+            lastSelEnd = newSelEnd
+            return
+        }
+
+        // Detect external text changes: if cursor position changed and we have pinyin buffer, clear it
+        val cursorMoved = (newSelStart != lastSelStart || newSelEnd != lastSelEnd)
+        if (cursorMoved && inputLanguage == InputLanguage.ZH_PINYIN && pinyinComposer.currentRaw().isNotBlank()) {
+            // External change detected — reset pinyin state
+            pinyinComposer.clear()
+            rimeController.resetPinyinPage()
+            currentInputConnection?.setComposingText("", 0)
+            streamingPreviewView.text = ""
+            updateComposingBar()
+            refreshSuggestionTray()
+        }
+        lastSelStart = newSelStart
+        lastSelEnd = newSelEnd
+
+        // Handle text selection for auto-showing skill bar
+        val hasSelection = newSelEnd > newSelStart
+        if (hasSelection) {
+            // Text is selected — auto-show skill bar if not already visible
+            if (!isSkillBarVisible) {
+                isSkillBarVisible = true
+                selectionTriggeredSkillBar = true
+                if (::skillBarView.isInitialized) {
+                    skillBarView.visibility = View.VISIBLE
+                }
+                refreshSuggestionTray()
+            }
+        } else {
+            // Selection cleared — auto-hide skill bar only if we were the ones who opened it
+            if (selectionTriggeredSkillBar && isSkillBarVisible) {
+                isSkillBarVisible = false
+                selectionTriggeredSkillBar = false
+                if (::skillBarView.isInitialized) {
+                    skillBarView.visibility = View.GONE
+                }
+                refreshSuggestionTray()
+            }
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         stateJob?.cancel()
@@ -235,7 +312,7 @@ class ThreplyInputMethodService : InputMethodService() {
         return runCatching {
             // Don't initialize lifecycle here - will be done when view is attached
 
-            val composeView = ComposeView(this).apply {
+            ComposeView(this).apply {
                 // Use DisposeOnDetachedFromWindow instead of DisposeOnViewTreeLifecycleDestroyed
                 // because InputMethodService doesn't have a proper ViewTree lifecycle
                 setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
@@ -253,15 +330,28 @@ class ThreplyInputMethodService : InputMethodService() {
                             setAiMode(ImeAiMode.B)
                             triggerAiFromCurrentInput()
                         },
-                        onScan = { triggerChatScan() }
+                        onScan = { triggerChatScan() },
+                        onSourceLanguageChange = { lang -> 
+                            aiCoordinator.setTranslateSourceLanguage(lang)
+                        },
+                        onTargetLanguageChange = { lang -> 
+                            aiCoordinator.setTranslateTargetLanguage(lang)
+                        },
+                        onTranslate = { source, target ->
+                            val textToTranslate = getSelectedTextOrCurrentInput()
+                            if (textToTranslate.isNotEmpty()) {
+                                aiCoordinator.requestTranslation(textToTranslate, source, target)
+                            }
+                        },
+                        onExpandReply = { replyId, replyText ->
+                            aiCoordinator.expandReplyForChildren(replyId, replyText)
+                        },
+                        onNavigateBack = {
+                            aiCoordinator.navigateBackInReplyTree()
+                        },
+                        selectedText = getSelectedTextOrCurrentInput()
                     )
                 }
-            }
-
-            LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                visibility = View.GONE
-                addView(composeView)
             }
         }.getOrElse {
             Log.e(TAG, "Failed to create AI panel, using plain suggestion panel", it)
@@ -284,23 +374,66 @@ class ThreplyInputMethodService : InputMethodService() {
             visibility = View.GONE
         }
 
-        // Initialize suggestionContainer as hidden (pinyin candidates still use it)
+        // Composing bar: shows real-time pinyin/english input buffer above candidate tray
+        composingBarView = TextView(this).apply {
+            text = ""
+            textSize = 15f
+            setTextColor(0xFF2D3644.toInt())
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(14), dp(4), dp(14), dp(4))
+            setBackgroundColor(0xFFF0F1F3.toInt())
+            visibility = View.GONE
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        }
+
+        // Candidate tray: horizontal LinearLayout inside a HorizontalScrollView for unlimited scrolling
         suggestionContainer = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(4), 0, dp(4), 0)
         }
+
+        val scrollView = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            isFillViewport = false
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            addView(suggestionContainer)
+        }
+
+        skillBarView = createSkillBar()
 
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             addView(streamingPreviewView)
-            addView(suggestionContainer)
+            addView(composingBarView)
+            addView(skillBarView)
+            addView(scrollView)
         }
     }
 
     private fun exitAiPanel() {
         // Hide AI panel and just show keyboard
-        if (::aiPanelView.isInitialized) {
-            aiPanelView.visibility = View.GONE
+        if (::aiPanelWrapper.isInitialized) {
+            aiPanelWrapper.visibility = View.GONE
+        }
+        rebuildKeyboard()
+    }
+
+    /** Toggles the AI panel (B/C/Translate overlay) on or off. */
+    private fun toggleAiPanel() {
+        if (!::aiPanelWrapper.isInitialized) return
+        if (aiPanelWrapper.visibility == View.VISIBLE) {
+            exitAiPanel()
+        } else {
+            setAiMode(aiMode)
+            triggerAiFromCurrentInput()
+            rebuildKeyboard()
         }
     }
 
@@ -323,9 +456,9 @@ class ThreplyInputMethodService : InputMethodService() {
         val merged = when {
             inputLanguage == InputLanguage.ZH_PINYIN && pinyinComposer.currentRaw().isNotBlank() -> {
                 val pinyin = pinyinComposer.currentRaw()
-                streamingPreviewView.text = "拼音：$pinyin（第${rimeController.currentPinyinPage() + 1}页）"
-
-                val candidates = currentPinyinCandidates(limit = 5)
+                streamingPreviewView.text = "拼音：$pinyin"
+                // Fetch up to 20 candidates — all displayed via horizontal scroll, no paging needed
+                val candidates = currentPinyinCandidates(limit = 20)
                 candidates.map {
                     ImeSuggestion(text = it, source = SuggestionSource.RIME, isStreaming = false)
                 }
@@ -333,7 +466,7 @@ class ThreplyInputMethodService : InputMethodService() {
             latestAiSuggestions.isNotEmpty() -> latestAiSuggestions
             else -> {
                 val fallback = rimeController.suggest(PrefsManager.getImeLastInputContext(this))
-                fallback.take(3).map { ImeSuggestion(it, SuggestionSource.RIME, false) }
+                fallback.take(8).map { ImeSuggestion(it, SuggestionSource.RIME, false) }
             }
         }
 
@@ -342,30 +475,25 @@ class ThreplyInputMethodService : InputMethodService() {
             return
         }
 
-        if (inputLanguage == InputLanguage.ZH_PINYIN && pinyinComposer.currentRaw().isNotBlank()) {
-            suggestionContainer.addView(createPagerChip("‹") {
-                rimeController.previousPinyinPage()
-                refreshSuggestionTray()
-            })
+        // All chips are added in sequence; the parent HorizontalScrollView handles overflow
+        // Leading "/" button to toggle the skill bar
+        suggestionContainer.addView(createSlashButton())
+        merged.forEachIndexed { index, suggestion ->
+            suggestionContainer.addView(createSuggestionChip(suggestion, isHighlighted = index == 0))
         }
-
-        merged.forEach { suggestion ->
-            suggestionContainer.addView(createSuggestionChip(suggestion))
+        // Trailing expand button — only shown when there are candidates to expand
+        if (merged.isNotEmpty()) {
+            suggestionContainer.addView(createExpandButton())
         }
-
-        if (inputLanguage == InputLanguage.ZH_PINYIN && pinyinComposer.currentRaw().isNotBlank()) {
-            suggestionContainer.addView(createPagerChip("›") {
-                rimeController.nextPinyinPage()
-                refreshSuggestionTray()
-            })
-        }
+        // Keep expanded panel in sync with current candidates
+        updateExpandedPanel(merged)
     }
 
-    private fun currentPinyinCandidates(limit: Int = 5): List<String> {
+    private fun currentPinyinCandidates(limit: Int = 20): List<String> {
         val pinyin = pinyinComposer.currentRaw().trim().lowercase()
         if (pinyin.isBlank()) return emptyList()
 
-        val safeLimit = limit.coerceIn(1, 20)
+        val safeLimit = limit.coerceIn(1, 30)
 
         val rimeCandidates = rimeController.suggestFromPinyin(pinyin)
             .asSequence()
@@ -375,10 +503,11 @@ class ThreplyInputMethodService : InputMethodService() {
             .toList()
         if (rimeCandidates.isNotEmpty()) return rimeCandidates.take(safeLimit)
 
+        // Fetch all candidates from fallback lexicon (page 0 only — scroll replaces pagination)
         val fallbackCandidates = RimeFallbackLexicon.lookup(
-            raw = pinyin,
+            pinyin = pinyin,
             limit = safeLimit,
-            page = rimeController.currentPinyinPage()
+            page = 0
         ).filter { containsHanOrPunctuation(it) }
         if (fallbackCandidates.isNotEmpty()) return fallbackCandidates
 
@@ -400,29 +529,406 @@ class ThreplyInputMethodService : InputMethodService() {
         }
     }
 
-    private fun createPagerChip(label: String, onTap: () -> Unit): View {
+    /** The expand/collapse button at the right end of the candidate tray. */
+    private fun createExpandButton(): View {
         val bg = GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
-            cornerRadius = dp(12).toFloat()
-            setColor(0xFFE2E5EA.toInt())
-            setStroke(dp(1), 0xFFB9C0CB.toInt())
+            cornerRadius = dp(14).toFloat()
+            setColor(if (isExpandedPanelVisible) 0xFF3D5A80.toInt() else 0xFFE5EAF3.toInt())
+            setStroke(dp(1), if (isExpandedPanelVisible) 0xFF2D4A6E.toInt() else 0xFFB5BECF.toInt())
         }
-
         return TextView(this).apply {
-            text = label
-            textSize = 14f
-            setTextColor(0xFF3A475A.toInt())
+            text = if (isExpandedPanelVisible) "⊟" else "⊞"
+            textSize = 15f
+            setTextColor(if (isExpandedPanelVisible) 0xFFFFFFFF.toInt() else 0xFF3A475A.toInt())
             gravity = Gravity.CENTER
             background = bg
-            setPadding(dp(10), dp(7), dp(10), dp(7))
+            setPadding(dp(10), dp(6), dp(10), dp(6))
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                marginEnd = dp(8)
-            }
-            setOnClickListener { onTap() }
+            ).apply { marginStart = dp(4) }
+            setOnClickListener { toggleExpandedPanel() }
         }
+    }
+
+    /** Toggles the expanded candidate grid panel. */
+    private fun toggleExpandedPanel() {
+        isExpandedPanelVisible = !isExpandedPanelVisible
+        if (::expandedCandidatePanel.isInitialized) {
+            expandedCandidatePanel.visibility =
+                if (isExpandedPanelVisible) View.VISIBLE else View.GONE
+        }
+        // Hide/show keyboard rows (index 1 onwards, except the last which is expandedCandidatePanel)
+        if (::keyboardRoot.isInitialized) {
+            val lastIndex = keyboardRoot.childCount - 1
+            for (i in 1 until lastIndex) {
+                keyboardRoot.getChildAt(i)?.visibility =
+                    if (isExpandedPanelVisible) View.GONE else View.VISIBLE
+            }
+        }
+        refreshSuggestionTray()
+    }
+
+    /**
+     * Rebuilds the expanded candidate grid with the current merged suggestions.
+     * Full-screen layout: left side = 4-column candidate grid, right side = action buttons.
+     */
+    private fun updateExpandedPanel(suggestions: List<ImeSuggestion>) {
+        if (!::expandedCandidatePanel.isInitialized) return
+        expandedCandidatePanel.removeAllViews()
+        if (suggestions.isEmpty() || !isExpandedPanelVisible) return
+
+        val mainRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.MATCH_PARENT
+            )
+        }
+
+        // Left: candidate grid (4 columns)
+        val gridContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f)
+            setPadding(dp(6), dp(6), dp(6), dp(6))
+        }
+
+        val columnsPerRow = 4
+        var currentRow: LinearLayout? = null
+
+        suggestions.forEachIndexed { index, suggestion ->
+            if (index % columnsPerRow == 0) {
+                currentRow = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        0,
+                        1f
+                    ).apply { bottomMargin = dp(4) }
+                }
+                gridContainer.addView(currentRow)
+            }
+
+            val chipBg = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dp(10).toFloat()
+                setColor(if (index == 0) 0xFF3D5A80.toInt() else 0xFFFFFFFF.toInt())
+                setStroke(dp(1), if (index == 0) 0xFF2D4A6E.toInt() else 0xFFD0D3D8.toInt())
+            }
+            val chip = TextView(this).apply {
+                text = suggestion.text
+                textSize = 18f
+                setTextColor(if (index == 0) 0xFFFFFFFF.toInt() else 0xFF2D3644.toInt())
+                gravity = Gravity.CENTER
+                background = chipBg
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f).apply {
+                    marginEnd = dp(4)
+                }
+                setOnClickListener {
+                    isExpandedPanelVisible = false
+                    expandedCandidatePanel.visibility = View.GONE
+                    // Restore keyboard rows
+                    if (::keyboardRoot.isInitialized) {
+                        val lastIndex = keyboardRoot.childCount - 1
+                        for (i in 1 until lastIndex) {
+                            keyboardRoot.getChildAt(i)?.visibility = View.VISIBLE
+                        }
+                    }
+                    commitSuggestion(suggestion.text)
+                }
+            }
+            currentRow?.addView(chip)
+        }
+
+        // Fill last row with empty spacers if needed
+        val remainder = suggestions.size % columnsPerRow
+        if (remainder != 0) {
+            repeat(columnsPerRow - remainder) {
+                currentRow?.addView(View(this).apply {
+                    layoutParams = LinearLayout.LayoutParams(0, dp(1), 1f)
+                })
+            }
+        }
+
+        // Right: action button column (返回/删除/收起)
+        val actionColumn = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(dp(80), LinearLayout.LayoutParams.MATCH_PARENT)
+            setPadding(dp(4), dp(6), dp(6), dp(6))
+        }
+
+        val actionButtons = listOf(
+            Triple("返回", "↵") { handleEnter() },
+            Triple("删除", "⌫") { handleBackspace() },
+            Triple("收起", "⊟") { toggleExpandedPanel() }
+        )
+
+        actionButtons.forEach { (label, icon, action) ->
+            val btnBg = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dp(10).toFloat()
+                setColor(0xFFE5EAF3.toInt())
+                setStroke(dp(1), 0xFFB5BECF.toInt())
+            }
+            val btn = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                background = btnBg
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    0,
+                    1f
+                ).apply { bottomMargin = dp(6) }
+                setOnClickListener { action() }
+            }
+            val iconView = TextView(this).apply {
+                text = icon
+                textSize = 20f
+                setTextColor(0xFF3A475A.toInt())
+                gravity = Gravity.CENTER
+            }
+            val labelView = TextView(this).apply {
+                text = label
+                textSize = 11f
+                setTextColor(0xFF556072.toInt())
+                gravity = Gravity.CENTER
+            }
+            btn.addView(iconView)
+            btn.addView(labelView)
+            actionColumn.addView(btn)
+        }
+
+        mainRow.addView(gridContainer)
+        mainRow.addView(actionColumn)
+        expandedCandidatePanel.addView(mainRow)
+    }
+
+    /** The "/" button in the candidate tray that toggles the skill bar. */
+    private fun createSlashButton(): View {
+        val bg = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = dp(14).toFloat()
+            setColor(if (isSkillBarVisible) 0xFF3D5A80.toInt() else 0xFFE5EAF3.toInt())
+            setStroke(dp(1), if (isSkillBarVisible) 0xFF2D4A6E.toInt() else 0xFFB5BECF.toInt())
+        }
+        return TextView(this).apply {
+            text = "/"
+            textSize = 15f
+            setTextColor(if (isSkillBarVisible) 0xFFFFFFFF.toInt() else 0xFF3A475A.toInt())
+            gravity = Gravity.CENTER
+            background = bg
+            setPadding(dp(12), dp(6), dp(12), dp(6))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { marginEnd = dp(6) }
+            setOnClickListener { toggleSkillBar() }
+        }
+    }
+
+    /** Builds the skill bar: Translate / Replace / Polish cards. Hidden by default. */
+    private fun createSkillBar(): View {
+        val skills = listOf(
+            Triple("翻译", "Translate", TextSkill.TRANSLATE),
+            Triple("替换", "Replace",   TextSkill.REPLACE),
+            Triple("润色", "Polish",    TextSkill.POLISH)
+        )
+
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(8), dp(6), dp(8), dp(6))
+            setBackgroundColor(0xFFF7F8FA.toInt())
+            visibility = View.GONE
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        }
+
+        skills.forEach { (label, sublabel, skill) ->
+            val cardBg = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dp(12).toFloat()
+                setColor(0xFFEAF2FF.toInt())
+                setStroke(dp(1), 0xFFAFC8E8.toInt())
+            }
+            val card = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                background = cardBg
+                setPadding(dp(14), dp(8), dp(14), dp(8))
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    marginEnd = dp(6)
+                }
+                setOnClickListener {
+                    toggleSkillBar()
+                    triggerSkill(skill)
+                }
+            }
+            val labelView = TextView(this).apply {
+                text = label
+                textSize = 14f
+                setTextColor(0xFF1E3A5F.toInt())
+                gravity = Gravity.CENTER
+                typeface = Typeface.DEFAULT_BOLD
+            }
+            val subView = TextView(this).apply {
+                text = sublabel
+                textSize = 10f
+                setTextColor(0xFF6E8DAA.toInt())
+                gravity = Gravity.CENTER
+            }
+            card.addView(labelView)
+            card.addView(subView)
+            row.addView(card)
+        }
+
+        return row
+    }
+
+    /**
+     * Replaces the skill bar content with an undo prompt after Replace/Polish commit.
+     * Shows the original text preview and an "撤销" button.
+     */
+    private fun showUndoBar(undo: UndoContext) {
+        if (!::skillBarView.isInitialized) return
+
+        // Rebuild skillBarView content as undo bar
+        val container = skillBarView as? LinearLayout ?: return
+        container.removeAllViews()
+        container.visibility = View.VISIBLE
+        isSkillBarVisible = true
+
+        val skillLabel = when (undo.skill) {
+            TextSkill.REPLACE -> "替换"
+            TextSkill.POLISH -> "润色"
+            else -> "操作"
+        }
+
+        // Preview label
+        val preview = TextView(this).apply {
+            text = "$skillLabel 完成：\"${undo.originalText.take(20)}${if (undo.originalText.length > 20) "…" else "\""}"
+            textSize = 12f
+            setTextColor(0xFF556072.toInt())
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(10), 0, dp(6), 0)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+        }
+
+        // Undo button
+        val undoBg = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = dp(12).toFloat()
+            setColor(0xFFFFEBEB.toInt())
+            setStroke(dp(1), 0xFFE0A0A0.toInt())
+        }
+        val undoBtn = TextView(this).apply {
+            text = "↩ 撤销"
+            textSize = 13f
+            setTextColor(0xFFB03030.toInt())
+            gravity = Gravity.CENTER
+            background = undoBg
+            setPadding(dp(16), dp(8), dp(16), dp(8))
+            typeface = Typeface.DEFAULT_BOLD
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { marginEnd = dp(8) }
+            setOnClickListener { performUndo(undo) }
+        }
+
+        container.addView(preview)
+        container.addView(undoBtn)
+        refreshSuggestionTray()
+    }
+
+    /**
+     * Performs one-step undo: deletes the replaced text and re-inserts the original.
+     */
+    private fun performUndo(undo: UndoContext) {
+        val ic = currentInputConnection ?: return
+        // Delete the replaced text that was just inserted
+        val deleteLen = undo.replacedText.length
+        ic.deleteSurroundingText(deleteLen, 0)
+        // Re-insert original text
+        ic.commitText(undo.originalText, 1)
+        PrefsManager.setImeLastInputContext(this, undo.originalText)
+        // Reset skill bar back to normal
+        rebuildSkillBar()
+        isSkillBarVisible = false
+        skillBarView.visibility = View.GONE
+        refreshSuggestionTray()
+    }
+
+    /**
+     * Rebuilds the skill bar back to its original Translate/Replace/Polish state
+     * (used after undo clears the undo-bar content).
+     */
+    private fun rebuildSkillBar() {
+        if (!::skillBarView.isInitialized) return
+        val container = skillBarView as? LinearLayout ?: return
+        container.removeAllViews()
+
+        val skills = listOf(
+            Triple("翻译", "Translate", TextSkill.TRANSLATE),
+            Triple("替换", "Replace",   TextSkill.REPLACE),
+            Triple("润色", "Polish",    TextSkill.POLISH)
+        )
+        skills.forEach { (label, sublabel, skill) ->
+            val cardBg = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dp(12).toFloat()
+                setColor(0xFFEAF2FF.toInt())
+                setStroke(dp(1), 0xFFAFC8E8.toInt())
+            }
+            val card = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                background = cardBg
+                setPadding(dp(14), dp(8), dp(14), dp(8))
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    marginEnd = dp(6)
+                }
+                setOnClickListener {
+                    toggleSkillBar()
+                    triggerSkill(skill)
+                }
+            }
+            val labelView = TextView(this).apply {
+                text = label
+                textSize = 14f
+                setTextColor(0xFF1E3A5F.toInt())
+                gravity = Gravity.CENTER
+                typeface = Typeface.DEFAULT_BOLD
+            }
+            val subView = TextView(this).apply {
+                text = sublabel
+                textSize = 10f
+                setTextColor(0xFF6E8DAA.toInt())
+                gravity = Gravity.CENTER
+            }
+            card.addView(labelView)
+            card.addView(subView)
+            container.addView(card)
+        }
+    }
+
+    /** Toggles the skill bar visibility and refreshes the "/" button state. */
+    private fun toggleSkillBar() {
+        isSkillBarVisible = !isSkillBarVisible
+        // Manual toggle — reset the auto-selection flag so onUpdateSelection won't close it
+        selectionTriggeredSkillBar = false
+        if (::skillBarView.isInitialized) {
+            skillBarView.visibility = if (isSkillBarVisible) View.VISIBLE else View.GONE
+        }
+        // Rebuild candidate tray so the "/" button colour updates
+        refreshSuggestionTray()
     }
 
     private fun createMutedHint(text: String): View {
@@ -434,9 +940,18 @@ class ThreplyInputMethodService : InputMethodService() {
         }
     }
 
-    private fun createSuggestionChip(suggestion: ImeSuggestion): View {
-        val bgColor = if (suggestion.source == SuggestionSource.AI) 0xFFEAF2FF.toInt() else 0xFFEDEFEF.toInt()
-        val strokeColor = if (suggestion.source == SuggestionSource.AI) 0xFFAFBDD3.toInt() else 0xFFC2C7CB.toInt()
+    private fun createSuggestionChip(suggestion: ImeSuggestion, isHighlighted: Boolean = false): View {
+        val bgColor = when {
+            isHighlighted -> 0xFF3D5A80.toInt()
+            suggestion.source == SuggestionSource.AI -> 0xFFEAF2FF.toInt()
+            else -> 0xFFEDEFEF.toInt()
+        }
+        val strokeColor = when {
+            isHighlighted -> 0xFF2D4A6E.toInt()
+            suggestion.source == SuggestionSource.AI -> 0xFFAFBDD3.toInt()
+            else -> 0xFFC2C7CB.toInt()
+        }
+        val textColor = if (isHighlighted) 0xFFFFFFFF.toInt() else 0xFF2D3644.toInt()
 
         val bg = GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
@@ -448,7 +963,7 @@ class ThreplyInputMethodService : InputMethodService() {
         return TextView(this).apply {
             text = suggestion.text
             textSize = 13f
-            setTextColor(0xFF2D3644.toInt())
+            setTextColor(textColor)
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
             background = bg
@@ -467,10 +982,24 @@ class ThreplyInputMethodService : InputMethodService() {
         if (inputLanguage == InputLanguage.ZH_PINYIN && pinyinComposer.currentRaw().isNotBlank()) {
             pinyinComposer.clear()
             streamingPreviewView.text = ""
+            // Clear composing text before committing the candidate
+            isSettingComposingText = true
+            currentInputConnection?.setComposingText("", 0)
         }
+        englishBuffer.clear()
         currentInputConnection?.commitText(text, 1)
         PrefsManager.setImeLastInputContext(this, text)
-        refreshSuggestionTray()
+        updateComposingBar()
+
+        // If this commit matches a pending undo context, activate undo mode
+        val undo = pendingUndo
+        if (undo != null && undo.replacedText == text) {
+            pendingUndo = null
+            showUndoBar(undo)
+        } else {
+            pendingUndo = null
+            refreshSuggestionTray()
+        }
     }
 
     private fun createModeChip(label: String, onTap: () -> Unit): View {
@@ -541,9 +1070,10 @@ class ThreplyInputMethodService : InputMethodService() {
         aiMode = mode
         aiCoordinator.setMode(mode)
         // Show AI panel if it was hidden
-        if (::aiPanelView.isInitialized) {
-            aiPanelView.visibility = View.VISIBLE
+        if (::aiPanelWrapper.isInitialized) {
+            aiPanelWrapper.visibility = View.VISIBLE
         }
+        rebuildKeyboard()
     }
 
     /**
@@ -607,6 +1137,10 @@ class ThreplyInputMethodService : InputMethodService() {
                     }
                 }
                 streamingPreviewView.text = result
+                // For Replace/Polish: stage an undo context (activated when user taps the result chip)
+                if (skill == TextSkill.REPLACE || skill == TextSkill.POLISH) {
+                    pendingUndo = UndoContext(originalText = input, replacedText = result, skill = skill)
+                }
                 // Show result as a tappable suggestion
                 latestAiSuggestions = listOf(
                     ImeSuggestion(text = result, source = SuggestionSource.AI)
@@ -762,6 +1296,24 @@ class ThreplyInputMethodService : InputMethodService() {
         }
 
         addBottomRow()
+
+        // Add expanded candidate panel at the end (overlays keyboard when visible)
+        if (!::expandedCandidatePanel.isInitialized) {
+            expandedCandidatePanel = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                visibility = View.GONE
+                setBackgroundColor(0xFFF5F6F8.toInt())
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.MATCH_PARENT
+                )
+            }
+        }
+        // Remove if already added, then re-add at the end
+        if (expandedCandidatePanel.parent == keyboardRoot) {
+            keyboardRoot.removeView(expandedCandidatePanel)
+        }
+        keyboardRoot.addView(expandedCandidatePanel)
     }
 
     private fun addStandardRow(
@@ -808,6 +1360,20 @@ class ThreplyInputMethodService : InputMethodService() {
     private fun addBottomRow() {
         val row = createRow(bottomRow = true)
         val leftModeLabel = if (isSymbolMode) "ABC" else "符"
+
+        // AI panel toggle button
+        val aiPanelVisible = ::aiPanelWrapper.isInitialized && aiPanelWrapper.visibility == View.VISIBLE
+        row.addView(
+            createKeyView(
+                KeySpec(
+                    label = "AI",
+                    weight = 1.10f,
+                    style = if (aiPanelVisible) KeyStyle.Accent else KeyStyle.Action,
+                    onTap = { toggleAiPanel() }
+                ),
+                bottomRow = true
+            )
+        )
 
         row.addView(
             createKeyView(
@@ -1029,11 +1595,37 @@ class ThreplyInputMethodService : InputMethodService() {
                 rawValue[0].isLetter()
     }
 
+    /**
+     * Updates the composing bar above the candidate tray with the current input buffer.
+     * - Pinyin mode: shows the raw pinyin string (e.g. "nihao")
+     * - English mode: shows the current word being typed (e.g. "hello")
+     * The bar is hidden when there is nothing to show.
+     */
+    private fun updateComposingBar() {
+        if (!::composingBarView.isInitialized) return
+        val content = when (inputLanguage) {
+            InputLanguage.ZH_PINYIN -> pinyinComposer.currentRaw()
+            InputLanguage.EN -> englishBuffer.toString()
+        }
+        if (content.isBlank()) {
+            composingBarView.text = ""
+            composingBarView.visibility = View.GONE
+        } else {
+            composingBarView.text = "$content|"
+            composingBarView.visibility = View.VISIBLE
+        }
+    }
+
     private fun handlePinyinLetter(rawValue: String) {
         val ch = rawValue.lowercase().firstOrNull() ?: return
         pinyinComposer.push(ch)
         rimeController.resetPinyinPage()
         PrefsManager.setImeLastInputContext(this, pinyinComposer.currentRaw())
+        // Show composing text in the host input field
+        val pinyin = pinyinComposer.currentRaw()
+        isSettingComposingText = true
+        currentInputConnection?.setComposingText(pinyin, 1)
+        updateComposingBar()
         refreshSuggestionTray()
     }
 
@@ -1041,14 +1633,20 @@ class ThreplyInputMethodService : InputMethodService() {
         if (inputLanguage == InputLanguage.ZH_PINYIN && pinyinComposer.currentRaw().isNotBlank()) {
             val candidate = currentPinyinCandidates(limit = 1).firstOrNull()
                 ?: pinyinComposer.currentRaw()
+            // Clear composing text before committing the candidate
+            isSettingComposingText = true
+            currentInputConnection?.setComposingText("", 0)
             currentInputConnection?.commitText(candidate, 1)
             PrefsManager.setImeLastInputContext(this, candidate)
             pinyinComposer.clear()
             rimeController.resetPinyinPage()
             streamingPreviewView.text = ""
+            updateComposingBar()
             refreshSuggestionTray()
             return
         }
+        englishBuffer.clear()
+        updateComposingBar()
         commitText(" ")
     }
 
@@ -1058,8 +1656,11 @@ class ThreplyInputMethodService : InputMethodService() {
 
         if (inputLanguage == InputLanguage.EN) {
             pinyinComposer.clear()
+            englishBuffer.clear()
             rimeController.resetPinyinPage()
             streamingPreviewView.text = ""
+            isSettingComposingText = true
+            currentInputConnection?.setComposingText("", 0)
         }
 
         rebuildKeyboard()
@@ -1088,6 +1689,14 @@ class ThreplyInputMethodService : InputMethodService() {
         }
         currentInputConnection?.commitText(value, 1)
         PrefsManager.setImeLastInputContext(this, value)
+        // Track english buffer for composing bar display
+        if (inputLanguage == InputLanguage.EN && !isSymbolMode && value.length == 1 && value[0].isLetter()) {
+            englishBuffer.append(value)
+        } else {
+            // Non-letter commit (space, symbol, etc.) — flush the buffer
+            englishBuffer.clear()
+        }
+        updateComposingBar()
     }
 
     private fun handleBackspace() {
@@ -1095,27 +1704,44 @@ class ThreplyInputMethodService : InputMethodService() {
             pinyinComposer.pop()
             if (pinyinComposer.currentRaw().isBlank()) {
                 rimeController.resetPinyinPage()
+                isSettingComposingText = true
+                currentInputConnection?.setComposingText("", 0)
+            } else {
+                isSettingComposingText = true
+                currentInputConnection?.setComposingText(pinyinComposer.currentRaw(), 1)
             }
+            updateComposingBar()
             refreshSuggestionTray()
             if (pinyinComposer.currentRaw().isBlank()) {
                 streamingPreviewView.text = ""
             }
             return
         }
+        // English mode: pop one char from buffer if any
+        if (inputLanguage == InputLanguage.EN && englishBuffer.isNotEmpty()) {
+            englishBuffer.deleteCharAt(englishBuffer.lastIndex)
+        }
         currentInputConnection?.deleteSurroundingText(1, 0)
+        updateComposingBar()
     }
 
     private fun handleEnter() {
         if (inputLanguage == InputLanguage.ZH_PINYIN && pinyinComposer.currentRaw().isNotBlank()) {
             val candidate = currentPinyinCandidates(limit = 1).firstOrNull()
                 ?: pinyinComposer.currentRaw()
+            // Clear composing text before committing the candidate
+            isSettingComposingText = true
+            currentInputConnection?.setComposingText("", 0)
             currentInputConnection?.commitText(candidate, 1)
             pinyinComposer.clear()
             rimeController.resetPinyinPage()
             streamingPreviewView.text = ""
+            updateComposingBar()
             refreshSuggestionTray()
             return
         }
+        englishBuffer.clear()
+        updateComposingBar()
 
         val action = currentInputEditorInfo?.imeOptions?.and(EditorInfo.IME_MASK_ACTION)
             ?: EditorInfo.IME_ACTION_NONE
@@ -1144,5 +1770,11 @@ class ThreplyInputMethodService : InputMethodService() {
 
     private fun dp(value: Int): Int {
         return (value * resources.displayMetrics.density).toInt()
+    }
+
+    private fun getSelectedTextOrCurrentInput(): String {
+        val inputConnection = currentInputConnection ?: return ""
+        val selectedText = inputConnection.getSelectedText(0)
+        return selectedText?.toString() ?: PrefsManager.getImeLastInputContext(this)
     }
 }
