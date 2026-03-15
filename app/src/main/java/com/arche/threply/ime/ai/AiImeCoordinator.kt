@@ -31,6 +31,9 @@ class AiImeCoordinator(
     private val _state = MutableStateFlow(
         SuggestionState.idle(
             ImeAiMode.fromRaw(PrefsManager.getImeAiMode(context))
+        ).copy(
+            translateSourceLanguage = PrefsManager.getTranslateSourceLanguage(context),
+            translateTargetLanguage = PrefsManager.getTranslateTargetLanguage(context)
         )
     )
     val state: StateFlow<SuggestionState> = _state.asStateFlow()
@@ -44,6 +47,16 @@ class AiImeCoordinator(
     fun setMode(mode: ImeAiMode) {
         PrefsManager.setImeAiMode(context, mode.name)
         _state.value = _state.value.copy(mode = mode, errorMessage = null)
+    }
+
+    fun setTranslateSourceLanguage(languageCode: String) {
+        _state.value = _state.value.copy(translateSourceLanguage = languageCode)
+        PrefsManager.setTranslateSourceLanguage(context, languageCode)
+    }
+
+    fun setTranslateTargetLanguage(languageCode: String) {
+        _state.value = _state.value.copy(translateTargetLanguage = languageCode)
+        PrefsManager.setTranslateTargetLanguage(context, languageCode)
     }
 
     fun cancel() {
@@ -94,6 +107,7 @@ class AiImeCoordinator(
                         length = PrefsManager.getImeStyleLength(context).toDouble(),
                         temperature = PrefsManager.getImeStyleTemperature(context).toDouble()
                     )
+                    ImeAiMode.TRANSLATE -> ReplyStyle.NEUTRAL
                 }
                 val styleDescriptor = style.promptDescriptor
 
@@ -154,6 +168,166 @@ class AiImeCoordinator(
                     errorMessage = e.message ?: "请求失败，请重试"
                 )
             }
+        }
+    }
+
+    fun requestTranslation(text: String, sourceLanguage: String, targetLanguage: String) {
+        if (text.isEmpty()) {
+            _state.value = _state.value.copy(
+                suggestions = emptyList(),
+                streamingPreview = "",
+                isLoading = false,
+                errorMessage = "请输入要翻译的文本"
+            )
+            return
+        }
+
+        cancel()
+        activeJob = scope.launch {
+            _state.value = _state.value.copy(
+                isLoading = true,
+                streamingPreview = "",
+                errorMessage = null
+            )
+
+            try {
+                val useDeepSeek = PrefsManager.getDeepSeekApiKey(context).isNotBlank()
+                val translatedText = if (useDeepSeek) {
+                    DeepSeekDirectApi.translateText(
+                        context = context,
+                        text = text,
+                        targetLanguage = getLanguageName(targetLanguage)
+                    )
+                } else {
+                    BackendAiApi.translateText(
+                        context = context,
+                        text = text,
+                        sourceLanguage = sourceLanguage,
+                        targetLanguage = targetLanguage
+                    )
+                }
+
+                val suggestion = ImeSuggestion(text = translatedText, source = SuggestionSource.AI)
+                _state.value = _state.value.copy(
+                    suggestions = listOf(suggestion),
+                    streamingPreview = translatedText,
+                    isLoading = false,
+                    errorMessage = null
+                )
+
+                Log.d(TAG, "Translation completed: $sourceLanguage -> $targetLanguage")
+
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "Translation failed: ${e.message}")
+                _state.value = _state.value.copy(
+                    suggestions = emptyList(),
+                    streamingPreview = "",
+                    isLoading = false,
+                    errorMessage = e.message ?: "翻译失败，请重试"
+                )
+            }
+        }
+    }
+
+    fun expandReplyForChildren(parentReplyId: String, parentText: String) {
+        cancel()
+        activeJob = scope.launch {
+            _state.value = _state.value.copy(
+                isLoading = true,
+                streamingPreview = "",
+                errorMessage = null,
+                expandedReplyId = parentReplyId
+            )
+
+            try {
+                val style = ReplyStyle.NEUTRAL
+                val styleDescriptor = style.promptDescriptor
+
+                val onDelta: suspend (String) -> Unit = { deltaText ->
+                    val current = _state.value.streamingPreview
+                    _state.value = _state.value.copy(
+                        streamingPreview = current + deltaText
+                    )
+                }
+
+                val useDeepSeek = PrefsManager.getDeepSeekApiKey(context).isNotBlank()
+                val childReplies = if (useDeepSeek) {
+                    DeepSeekDirectApi.generateReplies(
+                        context = context,
+                        inputContext = parentText,
+                        styleDescriptor = styleDescriptor,
+                        onDelta = onDelta
+                    )
+                } else {
+                    BackendAiApi.generateBaseRepliesStream(
+                        context = context,
+                        inputContext = parentText,
+                        tone = 0,
+                        styleDescriptor = styleDescriptor,
+                        styleTemperature = 0.0,
+                        onDelta = onDelta
+                    )
+                }
+
+                val childSuggestions = childReplies
+                    .filter { it.isNotBlank() }
+                    .take(3)
+                    .map { ImeSuggestion(text = it, source = SuggestionSource.AI, parentId = parentReplyId) }
+
+                // Update the parent suggestion with children
+                val updatedSuggestions = _state.value.suggestions.map { suggestion ->
+                    if (suggestion.id == parentReplyId) {
+                        suggestion.copy(children = childSuggestions)
+                    } else {
+                        suggestion
+                    }
+                }
+
+                _state.value = _state.value.copy(
+                    suggestions = updatedSuggestions,
+                    streamingPreview = if (childSuggestions.isNotEmpty()) childSuggestions.first().text else "",
+                    isLoading = false,
+                    errorMessage = null
+                )
+
+                Log.d(TAG, "Child replies generated: ${childSuggestions.size}")
+
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to generate child replies: ${e.message}")
+                _state.value = _state.value.copy(
+                    isLoading = false,
+                    errorMessage = e.message ?: "生成子回复失败，请重试"
+                )
+            }
+        }
+    }
+
+    fun navigateBackInReplyTree() {
+        val currentPath = _state.value.currentReplyTreePath
+        if (currentPath.isNotEmpty()) {
+            _state.value = _state.value.copy(
+                currentReplyTreePath = currentPath.dropLast(1),
+                expandedReplyId = null,
+                streamingPreview = ""
+            )
+        }
+    }
+
+    private fun getLanguageName(languageCode: String): String {
+        return when (languageCode) {
+            "auto" -> "自动检测"
+            "zh" -> "中文"
+            "en" -> "英文"
+            "ja" -> "日文"
+            "ko" -> "韩文"
+            "es" -> "西班牙文"
+            "fr" -> "法文"
+            "de" -> "德文"
+            else -> languageCode
         }
     }
 }

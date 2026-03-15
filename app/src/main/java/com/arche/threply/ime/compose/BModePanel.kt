@@ -3,6 +3,7 @@ package com.arche.threply.ime.compose
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -14,13 +15,16 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.arche.threply.ime.model.ImeSuggestion
 import kotlinx.coroutines.delay
 
 /**
  * B Mode panel: 3 reply suggestion cards with streaming typing animation.
+ * Supports long-press to expand child replies (reply tree).
  * Matches iOS ReplyOptionsLayer / ReplyOptionButton.
  */
 @Composable
@@ -28,7 +32,10 @@ fun BModePanel(
     suggestions: List<String>,
     isLoading: Boolean,
     streamingText: String,
-    onSelect: (String) -> Unit
+    onSelect: (String) -> Unit,
+    onLongPress: (String) -> Unit = {},
+    onBack: () -> Unit = {},
+    showBackButton: Boolean = false
 ) {
     Column(
         modifier = Modifier
@@ -36,6 +43,21 @@ fun BModePanel(
             .padding(horizontal = 6.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        // Back button (shown when in expanded tree view)
+        if (showBackButton) {
+            Text(
+                text = "← 返回",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                color = Color(0xFF3B6DAA),
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { onBack() }
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+        }
+
         // Show 3 cards: fill with suggestions or empty placeholders
         for (i in 0 until 3) {
             val text = suggestions.getOrNull(i) ?: ""
@@ -44,7 +66,8 @@ fun BModePanel(
                 text = text,
                 isLoading = isThisLoading,
                 streamingText = if (i == 0 && isLoading) streamingText else null,
-                onClick = { if (text.isNotBlank()) onSelect(text) }
+                onClick = { if (text.isNotBlank()) onSelect(text) },
+                onLongPress = { if (text.isNotBlank()) onLongPress(text) }
             )
         }
     }
@@ -55,9 +78,11 @@ private fun ReplyCard(
     text: String,
     isLoading: Boolean,
     streamingText: String?,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onLongPress: () -> Unit = {}
 ) {
     val shape = RoundedCornerShape(12.dp)
+    var isPressed by remember { mutableStateOf(false) }
 
     // Typing animation: reveal characters one by one
     val displayText = if (streamingText != null && streamingText.isNotBlank()) {
@@ -81,8 +106,26 @@ private fun ReplyCard(
             .height(52.dp)
             .shadow(6.dp, shape, ambientColor = Color.Black.copy(alpha = 0.18f))
             .clip(shape)
-            .background(Color.White)
-            .clickable(enabled = text.isNotBlank()) { onClick() },
+            .background(if (isPressed) Color(0xFFF0F0F0) else Color.White)
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onPress = {
+                        isPressed = true
+                        tryAwaitRelease()
+                        isPressed = false
+                    },
+                    onLongPress = {
+                        if (text.isNotBlank()) {
+                            onLongPress()
+                        }
+                    },
+                    onTap = {
+                        if (text.isNotBlank()) {
+                            onClick()
+                        }
+                    }
+                )
+            },
         contentAlignment = Alignment.CenterStart
     ) {
         if (isLoading && displayText.isBlank()) {
@@ -97,6 +140,17 @@ private fun ReplyCard(
             maxLines = 2,
             modifier = Modifier.padding(horizontal = 14.dp)
         )
+
+        // Long-press indicator (small dot in corner)
+        if (text.isNotBlank() && !isLoading) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(8.dp)
+                    .size(4.dp)
+                    .background(Color(0xFFAAAAAA), RoundedCornerShape(2.dp))
+            )
+        }
     }
 }
 

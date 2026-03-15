@@ -189,6 +189,19 @@ object PrefsManager {
     fun setImeInputLanguage(context: Context, value: String) =
         prefs(context).edit().putString("com.arche.threply.ime.inputLanguage", value).apply()
 
+    // ─── IME Translate Mode ───
+    fun getTranslateSourceLanguage(context: Context): String =
+        prefs(context).getString("com.arche.threply.ime.translate.sourceLanguage", "auto") ?: "auto"
+
+    fun setTranslateSourceLanguage(context: Context, languageCode: String) =
+        prefs(context).edit().putString("com.arche.threply.ime.translate.sourceLanguage", languageCode).apply()
+
+    fun getTranslateTargetLanguage(context: Context): String =
+        prefs(context).getString("com.arche.threply.ime.translate.targetLanguage", "en") ?: "en"
+
+    fun setTranslateTargetLanguage(context: Context, languageCode: String) =
+        prefs(context).edit().putString("com.arche.threply.ime.translate.targetLanguage", languageCode).apply()
+
     // ─── Screenshot Monitor ───
     fun isScreenshotMonitorEnabled(context: Context): Boolean =
         prefs(context).getBoolean("com.arche.threply.screenshot.enabled", false)

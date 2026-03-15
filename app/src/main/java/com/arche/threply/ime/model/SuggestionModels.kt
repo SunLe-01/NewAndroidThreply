@@ -2,7 +2,8 @@ package com.arche.threply.ime.model
 
 enum class ImeAiMode {
     B,
-    C;
+    C,
+    TRANSLATE;
 
     companion object {
         fun fromRaw(value: String?): ImeAiMode =
@@ -18,7 +19,10 @@ enum class SuggestionSource {
 data class ImeSuggestion(
     val text: String,
     val source: SuggestionSource,
-    val isStreaming: Boolean = false
+    val isStreaming: Boolean = false,
+    val id: String = text.hashCode().toString(),
+    val children: List<ImeSuggestion> = emptyList(),
+    val parentId: String? = null
 )
 
 data class SuggestionState(
@@ -26,7 +30,11 @@ data class SuggestionState(
     val suggestions: List<ImeSuggestion>,
     val streamingPreview: String,
     val isLoading: Boolean,
-    val errorMessage: String?
+    val errorMessage: String?,
+    val translateSourceLanguage: String = "auto",
+    val translateTargetLanguage: String = "en",
+    val currentReplyTreePath: List<String> = emptyList(),
+    val expandedReplyId: String? = null
 ) {
     companion object {
         fun idle(mode: ImeAiMode = ImeAiMode.B): SuggestionState =
@@ -35,7 +43,11 @@ data class SuggestionState(
                 suggestions = emptyList(),
                 streamingPreview = "",
                 isLoading = false,
-                errorMessage = null
+                errorMessage = null,
+                translateSourceLanguage = "auto",
+                translateTargetLanguage = "en",
+                currentReplyTreePath = emptyList(),
+                expandedReplyId = null
             )
     }
 }

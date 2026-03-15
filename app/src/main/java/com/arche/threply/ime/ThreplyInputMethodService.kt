@@ -84,6 +84,7 @@ class ThreplyInputMethodService : InputMethodService() {
     private var inputLanguage: InputLanguage = InputLanguage.EN
 
     private lateinit var keyboardRoot: LinearLayout
+    private lateinit var fallbackPanel: View
     private lateinit var suggestionContainer: LinearLayout
     private lateinit var streamingPreviewView: TextView
     private lateinit var composingBarView: TextView
@@ -156,7 +157,7 @@ class ThreplyInputMethodService : InputMethodService() {
                 }
             })
         }
-        val fallbackPanel = createFallbackPanel()
+        fallbackPanel = createFallbackPanel()
         keyboardRoot.addView(fallbackPanel)
         aiPanelView = createAiPanel(fallbackPanel)
         aiPanelWrapper = LinearLayout(this).apply {
@@ -303,7 +304,14 @@ class ThreplyInputMethodService : InputMethodService() {
             setBackgroundColor(0xFFDCDDDF.toInt())
             setPadding(dp(5), dp(6), dp(5), dp(6))
         }
-        keyboardRoot.addView(createFallbackPanel())
+        fallbackPanel = createFallbackPanel()
+        keyboardRoot.addView(fallbackPanel)
+        // Add hidden placeholder to keep same child index structure as normal view
+        aiPanelWrapper = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+        }
+        keyboardRoot.addView(aiPanelWrapper)
         rebuildKeyboard()
         return keyboardRoot
     }
@@ -418,9 +426,12 @@ class ThreplyInputMethodService : InputMethodService() {
     }
 
     private fun exitAiPanel() {
-        // Hide AI panel and just show keyboard
+        // Hide AI panel and restore fallback panel (skill bar + candidates)
         if (::aiPanelWrapper.isInitialized) {
             aiPanelWrapper.visibility = View.GONE
+        }
+        if (::fallbackPanel.isInitialized) {
+            fallbackPanel.visibility = View.VISIBLE
         }
         rebuildKeyboard()
     }
@@ -987,6 +998,22 @@ class ThreplyInputMethodService : InputMethodService() {
             currentInputConnection?.setComposingText("", 0)
         }
         englishBuffer.clear()
+
+        // In B/C mode, replace the original input text instead of appending
+        val ic = currentInputConnection
+        if (ic != null && (aiMode == ImeAiMode.B || aiMode == ImeAiMode.C)
+            && ::aiPanelWrapper.isInitialized && aiPanelWrapper.visibility == View.VISIBLE
+        ) {
+            val originalInput = PrefsManager.getImeLastInputContext(this)
+            if (originalInput.isNotBlank()) {
+                val before = ic.getTextBeforeCursor(originalInput.length, 0)?.toString().orEmpty()
+                if (before == originalInput) {
+                    // Delete the original text, then insert the AI reply
+                    ic.deleteSurroundingText(originalInput.length, 0)
+                }
+            }
+        }
+
         currentInputConnection?.commitText(text, 1)
         PrefsManager.setImeLastInputContext(this, text)
         updateComposingBar()
@@ -1069,9 +1096,12 @@ class ThreplyInputMethodService : InputMethodService() {
         if (!isAiAccessAllowed()) return
         aiMode = mode
         aiCoordinator.setMode(mode)
-        // Show AI panel if it was hidden
+        // Show AI panel and hide fallback panel (skill bar)
         if (::aiPanelWrapper.isInitialized) {
             aiPanelWrapper.visibility = View.VISIBLE
+        }
+        if (::fallbackPanel.isInitialized) {
+            fallbackPanel.visibility = View.GONE
         }
         rebuildKeyboard()
     }
@@ -1213,8 +1243,9 @@ class ThreplyInputMethodService : InputMethodService() {
     private fun rebuildKeyboard() {
         if (!::keyboardRoot.isInitialized) return
 
-        while (keyboardRoot.childCount > 1) {
-            keyboardRoot.removeViewAt(1)
+        // Keep fallbackPanel (index 0) and aiPanelWrapper (index 1), remove keyboard rows
+        while (keyboardRoot.childCount > 2) {
+            keyboardRoot.removeViewAt(2)
         }
 
         if (isSymbolMode) {

@@ -20,7 +20,7 @@ import com.arche.threply.ime.model.SuggestionState
 
 /**
  * Root Compose overlay for the AI panel inside the keyboard.
- * Switches between B mode (3 reply cards) and C mode (2D style pad).
+ * Switches between B mode (3 reply cards), C mode (2D style pad), and Translate mode.
  */
 @Composable
 fun ImeAiOverlay(
@@ -30,7 +30,13 @@ fun ImeAiOverlay(
     onExit: () -> Unit,
     onSelectReply: (String) -> Unit,
     onStyleConfirm: (Float, Float) -> Unit,
-    onScan: () -> Unit
+    onScan: () -> Unit,
+    onSourceLanguageChange: (String) -> Unit = {},
+    onTargetLanguageChange: (String) -> Unit = {},
+    onTranslate: (String, String) -> Unit = { _, _ -> },
+    onExpandReply: (String, String) -> Unit = { _, _ -> },
+    onNavigateBack: () -> Unit = {},
+    selectedText: String = ""
 ) {
     Column(
         modifier = Modifier
@@ -38,7 +44,7 @@ fun ImeAiOverlay(
             .background(Color(0xFFF0F1F3))
             .padding(vertical = 4.dp)
     ) {
-        // Action bar: B / C mode chips + refresh + scan + exit
+        // Action bar: B / C / Translate mode chips + refresh + scan + exit
         ActionBar(
             currentMode = state.mode,
             onModeChange = onModeChange,
@@ -49,7 +55,7 @@ fun ImeAiOverlay(
 
         Spacer(modifier = Modifier.height(4.dp))
 
-        // Content: B mode or C mode
+        // Content: B mode, C mode, or Translate mode
         AnimatedContent(
             targetState = state.mode,
             transitionSpec = {
@@ -61,15 +67,36 @@ fun ImeAiOverlay(
             when (mode) {
                 ImeAiMode.B -> {
                     val texts = state.suggestions.map { it.text }
+                    val showBackButton = state.currentReplyTreePath.isNotEmpty()
                     BModePanel(
                         suggestions = texts,
                         isLoading = state.isLoading,
                         streamingText = state.streamingPreview,
-                        onSelect = onSelectReply
+                        onSelect = onSelectReply,
+                        onLongPress = { replyText ->
+                            // Find the suggestion by text to get its ID
+                            val suggestion = state.suggestions.firstOrNull { it.text == replyText }
+                            if (suggestion != null) {
+                                onExpandReply(suggestion.id, replyText)
+                            }
+                        },
+                        onBack = onNavigateBack,
+                        showBackButton = showBackButton
                     )
                 }
                 ImeAiMode.C -> {
                     CModePanel(onConfirm = onStyleConfirm)
+                }
+                ImeAiMode.TRANSLATE -> {
+                    TranslatePanel(
+                        sourceLanguage = state.translateSourceLanguage,
+                        targetLanguage = state.translateTargetLanguage,
+                        onSourceLanguageChange = onSourceLanguageChange,
+                        onTargetLanguageChange = onTargetLanguageChange,
+                        onTranslate = onTranslate,
+                        isLoading = state.isLoading,
+                        streamingText = state.streamingPreview
+                    )
                 }
             }
         }
@@ -101,8 +128,12 @@ private fun ActionBar(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        ModeChip("B", currentMode == ImeAiMode.B) { onModeChange(ImeAiMode.B) }
+        ModeChip("B", currentMode == ImeAiMode.B) { 
+            onModeChange(ImeAiMode.B)
+            onRefresh()
+        }
         ModeChip("C", currentMode == ImeAiMode.C) { onModeChange(ImeAiMode.C) }
+        ModeChip("翻译", currentMode == ImeAiMode.TRANSLATE) { onModeChange(ImeAiMode.TRANSLATE) }
 
         Spacer(modifier = Modifier.weight(1f))
 
