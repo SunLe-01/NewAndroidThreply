@@ -104,14 +104,15 @@ class AiImeCoordinator(
         cancel()
         activeJob = scope.launch {
             val mode = _state.value.mode
-            // Reset reply tree on new root request
+            // Reset reply tree on new root request; save rootContext for expansion
             _state.value = _state.value.copy(
                 isLoading = true,
                 streamingPreview = "",
                 errorMessage = null,
                 replyStack = emptyList(),
                 replyPathTrail = emptyList(),
-                treeCache = emptyMap()
+                treeCache = emptyMap(),
+                rootContext = input
             )
 
             try {
@@ -298,23 +299,34 @@ class AiImeCoordinator(
                 }
 
                 val useDeepSeek = PrefsManager.getDeepSeekApiKey(context).isNotBlank()
+                val rootCtx = _state.value.rootContext
                 val childReplies = if (useDeepSeek) {
-                    DeepSeekDirectApi.generateReplies(
+                    DeepSeekDirectApi.generateExpansions(
                         context = context,
-                        inputContext = parentText,
+                        parentText = parentText,
+                        rootContext = rootCtx,
                         styleDescriptor = styleDescriptor,
                         onDelta = onDelta
                     )
                 } else {
+                    // Backend path: build explicit rewrite instruction as inputContext
+                    val rewriteContext = buildString {
+                        if (rootCtx.isNotBlank()) {
+                            append("聊天上下文（对方发来的消息）：\n$rootCtx\n\n")
+                        }
+                        append("以下是我准备发送给对方的一条回复候选，请改写成3条不同措辞的版本，")
+                        append("保持说话人方向和语义不变，不要把它当成对方的消息来回复：\n$parentText")
+                    }
                     BackendAiApi.generateBaseRepliesStream(
                         context = context,
-                        inputContext = parentText,
+                        inputContext = rewriteContext,
                         tone = 1,
                         styleDescriptor = styleDescriptor,
                         styleTemperature = style.temperature,
                         onDelta = onDelta
                     )
                 }
+                Log.d(TAG, "Reply tree expand: rootCtx=${rootCtx.take(50)}, parent=${parentText.take(50)}")
 
                 val childSuggestions = childReplies
                     .filter { it.isNotBlank() }

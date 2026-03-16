@@ -39,6 +39,8 @@ data class SuggestionState(
     val replyPathTrail: List<Int> = emptyList(),
     /** Cache: key = path (e.g. "0,2,1"), value = children for that node. */
     val treeCache: Map<String, List<ImeSuggestion>> = emptyMap(),
+    /** Original chat context that triggered the root suggestions (for expansion prompt). */
+    val rootContext: String = "",
     val expandedReplyId: String? = null,
     // Keep for backward compat but deprecated
     val currentReplyTreePath: List<String> = emptyList()
@@ -76,6 +78,7 @@ data class SuggestionState(
                 replyStack = emptyList(),
                 replyPathTrail = emptyList(),
                 treeCache = emptyMap(),
+                rootContext = "",
                 expandedReplyId = null,
                 currentReplyTreePath = emptyList()
             )

@@ -207,7 +207,8 @@ fun HomeScreen(
                                     !imeStatus.isEnabled -> "启用键盘"
                                     !imeStatus.isSelected -> "切换到 Threply"
                                     else -> "重新选择输入法"
-                                }
+                                },
+                                color = Color.Black
                             )
                         }
 
@@ -621,7 +622,7 @@ private fun ChatScanAccessibilityCard() {
                     ),
                     shape = RoundedCornerShape(12.dp)
                 ) {
-                    Text("前往设置")
+                    Text("前往开启", color = Color.Black)
                 }
             }
         }

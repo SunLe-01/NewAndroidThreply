@@ -223,6 +223,38 @@ fun LoginScreen(
             )
         }
 
+        Spacer(Modifier.height(14.dp))
+
+        // ── 测试账号快捷登录 ──
+        if (BuildConfig.DEBUG) {
+            Button(
+                onClick = {
+                    val testName = "测试用户"
+                    completeLoginState(
+                        context = context,
+                        displayName = testName,
+                        providerUserId = "test:test@threply.dev",
+                        accessToken = "test-access-token",
+                        refreshToken = "test-refresh-token",
+                        plan = "pro"
+                    )
+                    onLoginSuccess(testName)
+                    onDismiss()
+                },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFF4CAF50).copy(alpha = 0.15f),
+                    contentColor = Color(0xFF81C784)
+                ),
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(52.dp),
+                enabled = !isSigningIn
+            ) {
+                Text("测试账号登录（Debug）", fontSize = 15.sp)
+            }
+        }
+
         Spacer(Modifier.height(16.dp))
 
         Text(

@@ -1371,7 +1371,15 @@ class ThreplyInputMethodService : InputMethodService() {
             keyboardRoot.removeViewAt(2)
         }
 
-        if (isSymbolMode) {
+        // AI mode with panel visible: hide keyboard rows, only show bottom row
+        val aiPanelActive = aiMode in setOf(ImeAiMode.B, ImeAiMode.C, ImeAiMode.TRANSLATE)
+                && ::aiPanelWrapper.isInitialized
+                && aiPanelWrapper.visibility == View.VISIBLE
+
+        if (aiPanelActive) {
+            // Skip all letter/symbol rows — only add bottom row for navigation
+            addBottomRow()
+        } else if (isSymbolMode) {
             val isZh = inputLanguage == InputLanguage.ZH_PINYIN
             addStandardRow(
                 keys = listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "0"),
@@ -1487,7 +1495,9 @@ class ThreplyInputMethodService : InputMethodService() {
             )
         }
 
-        addBottomRow()
+        if (!aiPanelActive) {
+            addBottomRow()
+        }
 
         // Add expanded candidate panel at the end (overlays keyboard when visible)
         if (!::expandedCandidatePanel.isInitialized) {

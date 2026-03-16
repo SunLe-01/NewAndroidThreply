@@ -51,6 +51,40 @@ object DeepSeekDirectApi {
         parseReplies(fullText)
     }
 
+    // ── Public: expand a parent suggestion into 3 variations ────────
+
+    suspend fun generateExpansions(
+        context: Context,
+        parentText: String,
+        rootContext: String,
+        styleDescriptor: String,
+        onDelta: suspend (String) -> Unit
+    ): List<String> = withContext(Dispatchers.IO) {
+        val systemPrompt = buildString {
+            append("你是一个聊天回复改写助手。")
+            append("用户正在和别人聊天，已经选中了一条准备发送给对方的回复候选。")
+            append("请你基于这条回复候选的核心语义，改写出恰好3条不同版本。")
+            append("要求：")
+            append("1. 保持说话人方向不变——原文是[我]说给[对方]的，改写后仍然是[我]说给[对方]的。")
+            append("2. 保留原文的承诺、意图和语义目的，只改变措辞、角度或语气。")
+            append("3. 绝对不要把这条回复当成对方发来的消息去回答它。")
+            append("4. 每条改写独占一行，不要编号，不要加引号，不要解释。")
+            if (styleDescriptor.isNotBlank()) {
+                append("风格要求：$styleDescriptor")
+            }
+        }
+
+        val userMessage = buildString {
+            if (rootContext.isNotBlank()) {
+                append("聊天上下文（对方发来的消息）：\n$rootContext\n\n")
+            }
+            append("我选中的回复候选（请改写这条）：\n$parentText")
+        }
+
+        val fullText = streamChat(context, systemPrompt, userMessage, 0.8, onDelta)
+        parseReplies(fullText)
+    }
+
     // ── Public: text skills ──────────────────────────────────────────
 
     suspend fun translateText(

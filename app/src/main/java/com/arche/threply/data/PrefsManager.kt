@@ -87,8 +87,9 @@ object PrefsManager {
         prefs(context).edit().putString("com.arche.threply.backendBaseURL", url).apply()
 
     // ─── DeepSeek Direct API ───
-    fun getDeepSeekApiKey(context: Context): String =
-        prefs(context).getString("com.arche.threply.deepseek.apiKey", "") ?: ""
+    fun getDeepSeekApiKey(context: Context): String {
+        return prefs(context).getString("com.arche.threply.deepseek.apiKey", "")?.trim().orEmpty()
+    }
 
     fun setDeepSeekApiKey(context: Context, key: String) =
         prefs(context).edit().putString("com.arche.threply.deepseek.apiKey", key.trim()).apply()
