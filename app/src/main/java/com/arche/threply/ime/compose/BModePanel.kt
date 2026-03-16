@@ -16,10 +16,12 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.arche.threply.ime.model.ImeSuggestion
+import com.arche.threply.util.HapticsUtil
 import kotlinx.coroutines.delay
 
 /**
@@ -33,7 +35,7 @@ fun BModePanel(
     isLoading: Boolean,
     streamingText: String,
     onSelect: (String) -> Unit,
-    onLongPress: (String) -> Unit = {},
+    onLongPress: (Int, String) -> Unit = { _, _ -> },
     onBack: () -> Unit = {},
     showBackButton: Boolean = false
 ) {
@@ -67,7 +69,7 @@ fun BModePanel(
                 isLoading = isThisLoading,
                 streamingText = if (i == 0 && isLoading) streamingText else null,
                 onClick = { if (text.isNotBlank()) onSelect(text) },
-                onLongPress = { if (text.isNotBlank()) onLongPress(text) }
+                onLongPress = { if (text.isNotBlank()) onLongPress(i, text) }
             )
         }
     }
@@ -83,6 +85,7 @@ private fun ReplyCard(
 ) {
     val shape = RoundedCornerShape(12.dp)
     var isPressed by remember { mutableStateOf(false) }
+    val context = LocalContext.current
 
     // Typing animation: reveal characters one by one
     val displayText = if (streamingText != null && streamingText.isNotBlank()) {
@@ -107,7 +110,7 @@ private fun ReplyCard(
             .shadow(6.dp, shape, ambientColor = Color.Black.copy(alpha = 0.18f))
             .clip(shape)
             .background(if (isPressed) Color(0xFFF0F0F0) else Color.White)
-            .pointerInput(Unit) {
+            .pointerInput(text, onClick, onLongPress) {
                 detectTapGestures(
                     onPress = {
                         isPressed = true
@@ -116,11 +119,13 @@ private fun ReplyCard(
                     },
                     onLongPress = {
                         if (text.isNotBlank()) {
+                            HapticsUtil.impactMedium(context)
                             onLongPress()
                         }
                     },
                     onTap = {
                         if (text.isNotBlank()) {
+                            HapticsUtil.tap(context)
                             onClick()
                         }
                     }

@@ -37,6 +37,20 @@ object HapticsUtil {
         )
     }
 
+    /** Light tap feedback using Context (for IME key presses). */
+    fun tap(context: Context) {
+        if (!isEnabled(context)) return
+        val vibrator = getVibrator(context)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            vibrator.vibrate(
+                VibrationEffect.createPredefined(VibrationEffect.EFFECT_TICK)
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            vibrator.vibrate(10)
+        }
+    }
+
     /** Medium impact feedback (equivalent to iOS .medium) */
     fun impactMedium(context: Context) {
         if (!isEnabled(context)) return

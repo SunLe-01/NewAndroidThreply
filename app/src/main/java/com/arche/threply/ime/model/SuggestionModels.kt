@@ -33,9 +33,36 @@ data class SuggestionState(
     val errorMessage: String?,
     val translateSourceLanguage: String = "auto",
     val translateTargetLanguage: String = "en",
-    val currentReplyTreePath: List<String> = emptyList(),
-    val expandedReplyId: String? = null
+    /** Stack of reply layers: each layer is 3 suggestions. Root is index 0. */
+    val replyStack: List<List<ImeSuggestion>> = emptyList(),
+    /** Parallel path trail tracking which parent index was expanded at each depth. */
+    val replyPathTrail: List<Int> = emptyList(),
+    /** Cache: key = path (e.g. "0,2,1"), value = children for that node. */
+    val treeCache: Map<String, List<ImeSuggestion>> = emptyMap(),
+    val expandedReplyId: String? = null,
+    // Keep for backward compat but deprecated
+    val currentReplyTreePath: List<String> = emptyList()
 ) {
+    /** Current layer's suggestions (top of stack, or root suggestions). */
+    val currentLayerSuggestions: List<ImeSuggestion>
+        get() = replyStack.lastOrNull() ?: suggestions
+
+    /** Tree depth (0 = root). */
+    val treeDepth: Int get() = replyStack.size
+
+    /** Whether back button should show. */
+    val showBackButton: Boolean get() = replyStack.isNotEmpty()
+
+    /** Cache key for current path. */
+    val currentPathKey: String
+        get() = replyPathTrail.joinToString(",")
+
+    fun childPathKey(index: Int): String {
+        val parts = replyPathTrail.toMutableList()
+        parts.add(index)
+        return parts.joinToString(",")
+    }
+
     companion object {
         fun idle(mode: ImeAiMode = ImeAiMode.B): SuggestionState =
             SuggestionState(
@@ -46,8 +73,11 @@ data class SuggestionState(
                 errorMessage = null,
                 translateSourceLanguage = "auto",
                 translateTargetLanguage = "en",
-                currentReplyTreePath = emptyList(),
-                expandedReplyId = null
+                replyStack = emptyList(),
+                replyPathTrail = emptyList(),
+                treeCache = emptyMap(),
+                expandedReplyId = null,
+                currentReplyTreePath = emptyList()
             )
     }
 }

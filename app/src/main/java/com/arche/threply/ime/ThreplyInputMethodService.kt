@@ -1,6 +1,7 @@
 package com.arche.threply.ime
 
 import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Typeface
@@ -37,6 +38,8 @@ import com.arche.threply.ime.compose.ImeAiOverlay
 import com.arche.threply.ime.compose.ImeLifecycleOwner
 import com.arche.threply.ime.model.SuggestionState
 import com.arche.threply.screenshot.ChatScanAccessibilityService
+import com.arche.threply.ime.context.ChatContextHolder
+import com.arche.threply.util.HapticsUtil
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.platform.ComposeView
@@ -105,6 +108,40 @@ class ThreplyInputMethodService : InputMethodService() {
     /** Stores undo context after a Replace/Polish operation is committed. */
     private data class UndoContext(val originalText: String, val replacedText: String, val skill: TextSkill)
     private var pendingUndo: UndoContext? = null
+
+    /** Timestamp of last space commit for double-space → period detection. */
+    private var lastSpaceTimeMs: Long = 0L
+
+    /** Handler for context read timeout. */
+    private val contextReadTimeoutHandler = Handler(Looper.getMainLooper())
+
+    /** ASCII → Chinese full-width punctuation mapping for ZH_PINYIN mode. */
+    private val zhPunctuationMap = mapOf(
+        "," to "\uFF0C",   // ，
+        "." to "\u3002",   // 。
+        "?" to "\uFF1F",   // ？
+        "!" to "\uFF01",   // ！
+        ":" to "\uFF1A",   // ：
+        ";" to "\uFF1B",   // ；
+        "(" to "\uFF08",   // （
+        ")" to "\uFF09",   // ）
+        "\"" to "\u201C",  // " (left double quotation)
+        "'" to "\u2018",   // ' (left single quotation)
+        "[" to "\u3010",   // 【
+        "]" to "\u3011",   // 】
+        "<" to "\u300A",   // 《
+        ">" to "\u300B",   // 》
+        "\\" to "\u3001",  // 、(enumeration comma)
+        "/" to "\u3001",   // 、
+        "~" to "\uFF5E",   // ～
+        "@" to "\uFF20",   // ＠
+        "#" to "\uFF03",   // ＃
+        "$" to "\uFFE5",   // ￥
+        "^" to "\u2026",   // … (ellipsis)
+        "&" to "\uFF06",   // ＆
+        "-" to "\u2014",   // — (em dash)
+        "_" to "\u2014"    // — (em dash)
+    )
 
     private val imeScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val aiCoordinator by lazy(LazyThreadSafetyMode.NONE) { AiImeCoordinator(this) }
@@ -351,8 +388,8 @@ class ThreplyInputMethodService : InputMethodService() {
                                 aiCoordinator.requestTranslation(textToTranslate, source, target)
                             }
                         },
-                        onExpandReply = { replyId, replyText ->
-                            aiCoordinator.expandReplyForChildren(replyId, replyText)
+                        onExpandReplyAtIndex = { index, replyText ->
+                            aiCoordinator.expandReplyAtIndex(index, replyText)
                         },
                         onNavigateBack = {
                             aiCoordinator.navigateBackInReplyTree()
@@ -439,12 +476,22 @@ class ThreplyInputMethodService : InputMethodService() {
     /** Toggles the AI panel (B/C/Translate overlay) on or off. */
     private fun toggleAiPanel() {
         if (!::aiPanelWrapper.isInitialized) return
+        HapticsUtil.impactMedium(this)
         if (aiPanelWrapper.visibility == View.VISIBLE) {
             exitAiPanel()
         } else {
-            setAiMode(aiMode)
-            triggerAiFromCurrentInput()
-            rebuildKeyboard()
+            if (aiMode == ImeAiMode.B && ChatContextHolder.isAccessibilityServiceEnabled(this)) {
+                // B mode: always clear stale cache and force fresh screenshot+OCR
+                ChatContextHolder.clear()
+                requestHideSelf(0)
+                Handler(Looper.getMainLooper()).postDelayed({
+                    requestChatContextAndTrigger()
+                }, 400)
+            } else {
+                setAiMode(aiMode)
+                triggerAiFromCurrentInput()
+                rebuildKeyboard()
+            }
         }
     }
 
@@ -990,6 +1037,7 @@ class ThreplyInputMethodService : InputMethodService() {
     }
 
     private fun commitSuggestion(text: String) {
+        HapticsUtil.impactMedium(this)
         if (inputLanguage == InputLanguage.ZH_PINYIN && pinyinComposer.currentRaw().isNotBlank()) {
             pinyinComposer.clear()
             streamingPreviewView.text = ""
@@ -1118,12 +1166,87 @@ class ThreplyInputMethodService : InputMethodService() {
     private fun triggerAiFromCurrentInput() {
         if (!isAiAccessAllowed()) return
 
+        // In B mode, ALWAYS force a fresh screenshot+OCR scan (never use stale cache)
+        if (aiMode == ImeAiMode.B) {
+            if (ChatContextHolder.isAccessibilityServiceEnabled(this)) {
+                ChatContextHolder.clear()
+                requestHideSelf(0)
+                Handler(Looper.getMainLooper()).postDelayed({
+                    requestChatContextAndTrigger()
+                }, 400)
+                return
+            }
+        }
+
+        // Fallback: use input field text
+        triggerAiFromInputField()
+    }
+
+    /** Send broadcast to AccessibilityService to read context now, then trigger AI. */
+    private fun requestChatContextAndTrigger() {
+        Log.d(TAG, "Requesting on-demand chat context read (screenshot+OCR)")
+
+        // Register a one-shot receiver for the result
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context?, intent: Intent?) {
+                try { unregisterReceiver(this) } catch (_: Exception) {}
+                contextReadTimeoutHandler.removeCallbacksAndMessages(null)
+
+                val contextText = intent?.getStringExtra(
+                    ChatScanAccessibilityService.EXTRA_CONTEXT_TEXT
+                ).orEmpty()
+
+                // Now show the AI panel and trigger suggestions
+                setAiMode(aiMode)
+                rebuildKeyboard()
+                requestShowSelf(0)
+
+                if (contextText.isNotBlank()) {
+                    Log.d(TAG, "On-demand context received (${contextText.length} chars)")
+                    PrefsManager.setImeLastInputContext(this@ThreplyInputMethodService, contextText)
+                    aiCoordinator.requestSuggestions(contextText)
+                } else {
+                    Log.d(TAG, "On-demand context empty, falling back to input field")
+                    triggerAiFromInputField()
+                }
+            }
+        }
+
+        val filter = IntentFilter(ChatScanAccessibilityService.ACTION_CONTEXT_READY)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(receiver, filter, RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(receiver, filter)
+        }
+
+        // Timeout: if no response in 5 seconds, show panel anyway with fallback
+        contextReadTimeoutHandler.postDelayed({
+            try { unregisterReceiver(receiver) } catch (_: Exception) {}
+            Log.d(TAG, "Context read timed out, showing panel with fallback")
+            setAiMode(aiMode)
+            rebuildKeyboard()
+            requestShowSelf(0)
+            triggerAiFromInputField()
+        }, 5000)
+
+        // Send the request
+        val intent = Intent(ChatScanAccessibilityService.ACTION_READ_CONTEXT)
+        intent.setPackage(packageName)
+        sendBroadcast(intent)
+    }
+
+    /** Fallback: read text from input field and trigger AI. */
+    private fun triggerAiFromInputField() {
         val before = currentInputConnection?.getTextBeforeCursor(80, 0)?.toString().orEmpty()
         val selected = currentInputConnection?.getSelectedText(0)?.toString().orEmpty()
         val fallback = pinyinComposer.currentRaw()
         val input = (selected.ifBlank { before }).ifBlank { fallback }.trim()
         if (input.isBlank()) {
-            streamingPreviewView.text = "请先输入一些内容"
+            streamingPreviewView.text = if (aiMode == ImeAiMode.B) {
+                "未读取到聊天上下文，请开启无障碍服务或输入内容"
+            } else {
+                "请先输入一些内容"
+            }
             return
         }
         PrefsManager.setImeLastInputContext(this, input)
@@ -1249,43 +1372,81 @@ class ThreplyInputMethodService : InputMethodService() {
         }
 
         if (isSymbolMode) {
+            val isZh = inputLanguage == InputLanguage.ZH_PINYIN
             addStandardRow(
                 keys = listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "0"),
                 hints = listOf("", "", "", "", "", "", "", "", "", "")
             )
-            addStandardRow(
-                keys = listOf("@", "#", "$", "%", "&", "-", "+", "(", ")", "/"),
-                hints = listOf("~", "!", "*", "^", "=", "_", "\\", "[", "]", "?"),
-                leadingInsetWeight = 0.30f,
-                trailingInsetWeight = 0.30f
-            )
-            addActionRow(
-                leftKey = KeySpec(
-                    label = "ABC",
-                    weight = 1.25f,
-                    style = KeyStyle.Action,
-                    onTap = {
-                        isSymbolMode = false
-                        rebuildKeyboard()
-                    }
-                ),
-                centerKeys = listOf(
-                    KeySpec(label = ".", output = "."),
-                    KeySpec(label = ",", output = ","),
-                    KeySpec(label = "?", output = "?"),
-                    KeySpec(label = "!", output = "!"),
-                    KeySpec(label = "'", output = "'"),
-                    KeySpec(label = "\"", output = "\""),
-                    KeySpec(label = ":", output = ":")
-                ),
-                rightKey = KeySpec(
-                    label = "⌫",
-                    weight = 1.25f,
-                    style = KeyStyle.Action,
-                    onTap = { handleBackspace() },
-                    repeatOnLongPress = true
+            if (isZh) {
+                // Chinese punctuation priority layout
+                addStandardRow(
+                    keys = listOf("。", "，", "、", "？", "！", "：", "；", "（", "）", "…"),
+                    hints = listOf(".", ",", "/", "?", "!", ":", ";", "(", ")", "^"),
+                    leadingInsetWeight = 0.30f,
+                    trailingInsetWeight = 0.30f
                 )
-            )
+                addActionRow(
+                    leftKey = KeySpec(
+                        label = "ABC",
+                        weight = 1.25f,
+                        style = KeyStyle.Action,
+                        onTap = {
+                            isSymbolMode = false
+                            rebuildKeyboard()
+                        }
+                    ),
+                    centerKeys = listOf(
+                        KeySpec(label = "《", output = "《"),
+                        KeySpec(label = "》", output = "》"),
+                        KeySpec(label = "【", output = "【"),
+                        KeySpec(label = "】", output = "】"),
+                        KeySpec(label = "\u201C", output = "\u201C"),
+                        KeySpec(label = "\u201D", output = "\u201D"),
+                        KeySpec(label = "\u2014", output = "\u2014")
+                    ),
+                    rightKey = KeySpec(
+                        label = "⌫",
+                        weight = 1.25f,
+                        style = KeyStyle.Action,
+                        onTap = { handleBackspace() },
+                        repeatOnLongPress = true
+                    )
+                )
+            } else {
+                addStandardRow(
+                    keys = listOf("@", "#", "$", "%", "&", "-", "+", "(", ")", "/"),
+                    hints = listOf("~", "!", "*", "^", "=", "_", "\\", "[", "]", "?"),
+                    leadingInsetWeight = 0.30f,
+                    trailingInsetWeight = 0.30f
+                )
+                addActionRow(
+                    leftKey = KeySpec(
+                        label = "ABC",
+                        weight = 1.25f,
+                        style = KeyStyle.Action,
+                        onTap = {
+                            isSymbolMode = false
+                            rebuildKeyboard()
+                        }
+                    ),
+                    centerKeys = listOf(
+                        KeySpec(label = ".", output = "."),
+                        KeySpec(label = ",", output = ","),
+                        KeySpec(label = "?", output = "?"),
+                        KeySpec(label = "!", output = "!"),
+                        KeySpec(label = "'", output = "'"),
+                        KeySpec(label = "\"", output = "\""),
+                        KeySpec(label = ":", output = ":")
+                    ),
+                    rightKey = KeySpec(
+                        label = "⌫",
+                        weight = 1.25f,
+                        style = KeyStyle.Action,
+                        onTap = { handleBackspace() },
+                        repeatOnLongPress = true
+                    )
+                )
+            }
         } else {
             addStandardRow(
                 keys = listOf("q", "w", "e", "r", "t", "y", "u", "i", "o", "p"),
@@ -1436,7 +1597,12 @@ class ThreplyInputMethodService : InputMethodService() {
                 bottomRow = true
             )
         )
-        row.addView(createKeyView(KeySpec(label = ",", output = ",", weight = 0.80f), bottomRow = true))
+        val isZh = inputLanguage == InputLanguage.ZH_PINYIN
+        val commaLabel = if (isZh) "\uFF0C" else ","
+        val commaOutput = ","
+        val periodLabel = if (isZh) "\u3002" else "."
+        val periodOutput = "."
+        row.addView(createKeyView(KeySpec(label = commaLabel, output = commaOutput, weight = 0.80f), bottomRow = true))
         row.addView(
             createKeyView(
                 KeySpec(
@@ -1447,7 +1613,7 @@ class ThreplyInputMethodService : InputMethodService() {
                 bottomRow = true
             )
         )
-        row.addView(createKeyView(KeySpec(label = "。", output = ".", weight = 0.80f), bottomRow = true))
+        row.addView(createKeyView(KeySpec(label = periodLabel, output = periodOutput, weight = 0.80f), bottomRow = true))
         row.addView(
             createKeyView(
                 KeySpec(
@@ -1524,6 +1690,7 @@ class ThreplyInputMethodService : InputMethodService() {
                 marginEnd = dp(2)
             }
             val tapAction: () -> Unit = {
+                HapticsUtil.tap(this@ThreplyInputMethodService)
                 when {
                     spec.onTap != null -> spec.onTap.invoke()
                     shouldHandleAsPinyin(spec.output ?: spec.label) -> handlePinyinLetter(spec.output ?: spec.label)
@@ -1674,14 +1841,34 @@ class ThreplyInputMethodService : InputMethodService() {
             streamingPreviewView.text = ""
             updateComposingBar()
             refreshSuggestionTray()
+            lastSpaceTimeMs = 0L
             return
         }
+
+        // Double-space → period in Chinese mode
+        val now = System.currentTimeMillis()
+        if (inputLanguage == InputLanguage.ZH_PINYIN
+            && lastSpaceTimeMs > 0L
+            && (now - lastSpaceTimeMs) < 500L
+        ) {
+            // Delete the previous space, insert "。"
+            currentInputConnection?.deleteSurroundingText(1, 0)
+            currentInputConnection?.commitText("\u3002", 1)
+            PrefsManager.setImeLastInputContext(this, "\u3002")
+            lastSpaceTimeMs = 0L
+            englishBuffer.clear()
+            updateComposingBar()
+            return
+        }
+
+        lastSpaceTimeMs = if (inputLanguage == InputLanguage.ZH_PINYIN) now else 0L
         englishBuffer.clear()
         updateComposingBar()
         commitText(" ")
     }
 
     private fun toggleInputLanguage() {
+        HapticsUtil.impactMedium(this)
         inputLanguage = if (inputLanguage == InputLanguage.EN) InputLanguage.ZH_PINYIN else InputLanguage.EN
         PrefsManager.setImeInputLanguage(this, if (inputLanguage == InputLanguage.EN) "en" else "zh_pinyin")
 
@@ -1712,9 +1899,17 @@ class ThreplyInputMethodService : InputMethodService() {
 
     private fun commitText(rawValue: String) {
         val value = if (isSymbolMode) {
-            rawValue
+            // In symbol mode with Chinese input, map to full-width punctuation
+            if (inputLanguage == InputLanguage.ZH_PINYIN) {
+                zhPunctuationMap[rawValue] ?: rawValue
+            } else {
+                rawValue
+            }
         } else if (rawValue.length == 1 && rawValue[0].isLetter()) {
             if (isUppercase) rawValue.uppercase() else rawValue.lowercase()
+        } else if (inputLanguage == InputLanguage.ZH_PINYIN && rawValue.length == 1) {
+            // Map inline punctuation (comma, period on bottom row) to full-width
+            zhPunctuationMap[rawValue] ?: rawValue
         } else {
             rawValue
         }

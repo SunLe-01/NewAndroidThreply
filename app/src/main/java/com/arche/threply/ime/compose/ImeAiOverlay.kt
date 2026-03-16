@@ -12,11 +12,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.arche.threply.ime.model.ImeAiMode
 import com.arche.threply.ime.model.SuggestionState
+import com.arche.threply.util.HapticsUtil
 
 /**
  * Root Compose overlay for the AI panel inside the keyboard.
@@ -34,7 +36,7 @@ fun ImeAiOverlay(
     onSourceLanguageChange: (String) -> Unit = {},
     onTargetLanguageChange: (String) -> Unit = {},
     onTranslate: (String, String) -> Unit = { _, _ -> },
-    onExpandReply: (String, String) -> Unit = { _, _ -> },
+    onExpandReplyAtIndex: (Int, String) -> Unit = { _, _ -> },
     onNavigateBack: () -> Unit = {},
     selectedText: String = ""
 ) {
@@ -66,22 +68,18 @@ fun ImeAiOverlay(
         ) { mode ->
             when (mode) {
                 ImeAiMode.B -> {
-                    val texts = state.suggestions.map { it.text }
-                    val showBackButton = state.currentReplyTreePath.isNotEmpty()
+                    val layer = state.currentLayerSuggestions
+                    val texts = layer.map { it.text }
                     BModePanel(
                         suggestions = texts,
                         isLoading = state.isLoading,
                         streamingText = state.streamingPreview,
                         onSelect = onSelectReply,
-                        onLongPress = { replyText ->
-                            // Find the suggestion by text to get its ID
-                            val suggestion = state.suggestions.firstOrNull { it.text == replyText }
-                            if (suggestion != null) {
-                                onExpandReply(suggestion.id, replyText)
-                            }
+                        onLongPress = { index, replyText ->
+                            onExpandReplyAtIndex(index, replyText)
                         },
                         onBack = onNavigateBack,
-                        showBackButton = showBackButton
+                        showBackButton = state.showBackButton
                     )
                 }
                 ImeAiMode.C -> {
@@ -148,6 +146,7 @@ private fun ModeChip(label: String, selected: Boolean, onClick: () -> Unit) {
     val bg = if (selected) Color(0xFFE3EBF8) else Color(0xFFF2F3F5)
     val border = if (selected) Color(0xFF7BA4D9) else Color(0xFFD0D3D8)
     val textColor = if (selected) Color(0xFF3B6DAA) else Color(0xFF555555)
+    val context = LocalContext.current
 
     Text(
         text = label,
@@ -158,13 +157,14 @@ private fun ModeChip(label: String, selected: Boolean, onClick: () -> Unit) {
             .clip(RoundedCornerShape(10.dp))
             .background(bg)
             .border(1.dp, border, RoundedCornerShape(10.dp))
-            .clickable { onClick() }
+            .clickable { HapticsUtil.tap(context); onClick() }
             .padding(horizontal = 14.dp, vertical = 6.dp)
     )
 }
 
 @Composable
 private fun ActionChip(label: String, onClick: () -> Unit) {
+    val context = LocalContext.current
     Text(
         text = label,
         fontSize = 12.sp,
@@ -173,7 +173,7 @@ private fun ActionChip(label: String, onClick: () -> Unit) {
         modifier = Modifier
             .clip(RoundedCornerShape(10.dp))
             .background(Color(0xCC4A5568))
-            .clickable { onClick() }
+            .clickable { HapticsUtil.tap(context); onClick() }
             .padding(horizontal = 12.dp, vertical = 6.dp)
     )
 }

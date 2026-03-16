@@ -49,6 +49,15 @@ class AiImeCoordinator(
         _state.value = _state.value.copy(mode = mode, errorMessage = null)
     }
 
+    /** Set loading state (used when waiting for screenshot+OCR context read). */
+    fun setLoading() {
+        _state.value = _state.value.copy(
+            isLoading = true,
+            streamingPreview = "",
+            errorMessage = null
+        )
+    }
+
     fun setTranslateSourceLanguage(languageCode: String) {
         _state.value = _state.value.copy(translateSourceLanguage = languageCode)
         PrefsManager.setTranslateSourceLanguage(context, languageCode)
@@ -72,7 +81,10 @@ class AiImeCoordinator(
                 suggestions = emptyList(),
                 streamingPreview = "",
                 isLoading = false,
-                errorMessage = null
+                errorMessage = null,
+                replyStack = emptyList(),
+                replyPathTrail = emptyList(),
+                treeCache = emptyMap()
             )
             return
         }
@@ -88,22 +100,24 @@ class AiImeCoordinator(
         }
 
         // TODO: restore login gate before release
-        // if (!BackendSessionStore.isReadyForImeAi(context)) { ... }
 
         cancel()
         activeJob = scope.launch {
             val mode = _state.value.mode
+            // Reset reply tree on new root request
             _state.value = _state.value.copy(
                 isLoading = true,
                 streamingPreview = "",
-                errorMessage = null
+                errorMessage = null,
+                replyStack = emptyList(),
+                replyPathTrail = emptyList(),
+                treeCache = emptyMap()
             )
 
             try {
-                // B mode: neutral style; C mode: read from 2D pad stored in PrefsManager
+                // Both B and C modes use the 2D style pad settings from PrefsManager
                 val style = when (mode) {
-                    ImeAiMode.B -> ReplyStyle.NEUTRAL
-                    ImeAiMode.C -> ReplyStyle(
+                    ImeAiMode.B, ImeAiMode.C -> ReplyStyle(
                         length = PrefsManager.getImeStyleLength(context).toDouble(),
                         temperature = PrefsManager.getImeStyleTemperature(context).toDouble()
                     )
@@ -127,7 +141,7 @@ class AiImeCoordinator(
                         onDelta = onDelta
                     )
                 } else {
-                    val tone = if (mode == ImeAiMode.B) 0 else 1
+                    val tone = if (mode == ImeAiMode.TRANSLATE) 0 else 1
                     BackendAiApi.generateBaseRepliesStream(
                         context = context,
                         inputContext = input,
@@ -231,18 +245,49 @@ class AiImeCoordinator(
         }
     }
 
-    fun expandReplyForChildren(parentReplyId: String, parentText: String) {
-        cancel()
-        activeJob = scope.launch {
-            _state.value = _state.value.copy(
-                isLoading = true,
-                streamingPreview = "",
-                errorMessage = null,
-                expandedReplyId = parentReplyId
-            )
+    /**
+     * Long-press a reply card at [index] in the current layer to expand child replies.
+     * Matches iOS suggestionStack push behavior.
+     */
+    fun expandReplyAtIndex(index: Int, parentText: String) {
+        val s = _state.value
+        val pathKey = s.childPathKey(index)
 
+        // Check cache first
+        val cached = s.treeCache[pathKey]
+        if (cached != null) {
+            _state.value = s.copy(
+                replyStack = s.replyStack + listOf(cached),
+                replyPathTrail = s.replyPathTrail + index,
+                streamingPreview = "",
+                isLoading = false,
+                errorMessage = null
+            )
+            Log.d(TAG, "Reply tree: loaded cached children for path=$pathKey")
+            return
+        }
+
+        // Push placeholder layer and start generation
+        val placeholders = listOf(
+            ImeSuggestion(text = "", source = SuggestionSource.AI),
+            ImeSuggestion(text = "", source = SuggestionSource.AI),
+            ImeSuggestion(text = "", source = SuggestionSource.AI)
+        )
+        cancel()
+        _state.value = s.copy(
+            replyStack = s.replyStack + listOf(placeholders),
+            replyPathTrail = s.replyPathTrail + index,
+            isLoading = true,
+            streamingPreview = "",
+            errorMessage = null
+        )
+
+        activeJob = scope.launch {
             try {
-                val style = ReplyStyle.NEUTRAL
+                val style = ReplyStyle(
+                    length = PrefsManager.getImeStyleLength(context).toDouble(),
+                    temperature = PrefsManager.getImeStyleTemperature(context).toDouble()
+                )
                 val styleDescriptor = style.promptDescriptor
 
                 val onDelta: suspend (String) -> Unit = { deltaText ->
@@ -264,9 +309,9 @@ class AiImeCoordinator(
                     BackendAiApi.generateBaseRepliesStream(
                         context = context,
                         inputContext = parentText,
-                        tone = 0,
+                        tone = 1,
                         styleDescriptor = styleDescriptor,
-                        styleTemperature = 0.0,
+                        styleTemperature = style.temperature,
                         onDelta = onDelta
                     )
                 }
@@ -274,25 +319,22 @@ class AiImeCoordinator(
                 val childSuggestions = childReplies
                     .filter { it.isNotBlank() }
                     .take(3)
-                    .map { ImeSuggestion(text = it, source = SuggestionSource.AI, parentId = parentReplyId) }
+                    .map { ImeSuggestion(text = it, source = SuggestionSource.AI) }
 
-                // Update the parent suggestion with children
-                val updatedSuggestions = _state.value.suggestions.map { suggestion ->
-                    if (suggestion.id == parentReplyId) {
-                        suggestion.copy(children = childSuggestions)
-                    } else {
-                        suggestion
-                    }
+                // Update the top of the stack with real results and cache them
+                val cur = _state.value
+                val updatedStack = cur.replyStack.toMutableList()
+                if (updatedStack.isNotEmpty()) {
+                    updatedStack[updatedStack.lastIndex] = childSuggestions
                 }
-
-                _state.value = _state.value.copy(
-                    suggestions = updatedSuggestions,
+                _state.value = cur.copy(
+                    replyStack = updatedStack,
+                    treeCache = cur.treeCache + (pathKey to childSuggestions),
                     streamingPreview = if (childSuggestions.isNotEmpty()) childSuggestions.first().text else "",
                     isLoading = false,
                     errorMessage = null
                 )
-
-                Log.d(TAG, "Child replies generated: ${childSuggestions.size}")
+                Log.d(TAG, "Reply tree: generated ${childSuggestions.size} children for path=$pathKey")
 
             } catch (e: CancellationException) {
                 throw e
@@ -306,13 +348,17 @@ class AiImeCoordinator(
         }
     }
 
+    /** Pop one layer from the reply tree stack. */
     fun navigateBackInReplyTree() {
-        val currentPath = _state.value.currentReplyTreePath
-        if (currentPath.isNotEmpty()) {
-            _state.value = _state.value.copy(
-                currentReplyTreePath = currentPath.dropLast(1),
-                expandedReplyId = null,
-                streamingPreview = ""
+        val s = _state.value
+        if (s.replyStack.isNotEmpty()) {
+            cancel()
+            _state.value = s.copy(
+                replyStack = s.replyStack.dropLast(1),
+                replyPathTrail = s.replyPathTrail.dropLast(1),
+                streamingPreview = "",
+                isLoading = false,
+                expandedReplyId = null
             )
         }
     }
