@@ -215,4 +215,17 @@ object PrefsManager {
 
     fun setLastScreenshotUri(context: Context, uri: String) =
         prefs(context).edit().putString("com.arche.threply.screenshot.lastUri", uri).apply()
+
+    // ─── User Profile / Persona ───
+    fun isProfileEnabled(context: Context): Boolean =
+        prefs(context).getBoolean("threply.profile.enabled", false)
+
+    fun setProfileEnabled(context: Context, enabled: Boolean) =
+        prefs(context).edit().putBoolean("threply.profile.enabled", enabled).apply()
+
+    fun getProfileJson(context: Context): String =
+        prefs(context).getString("threply.userProfile.json", "") ?: ""
+
+    fun setProfileJson(context: Context, json: String) =
+        prefs(context).edit().putString("threply.userProfile.json", json).apply()
 }

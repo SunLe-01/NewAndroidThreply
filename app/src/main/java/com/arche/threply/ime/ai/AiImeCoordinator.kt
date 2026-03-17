@@ -6,6 +6,7 @@ import com.arche.threply.data.BackendAiApi
 import com.arche.threply.data.BackendSessionStore
 import com.arche.threply.data.DeepSeekDirectApi
 import com.arche.threply.data.PrefsManager
+import com.arche.threply.data.profile.UserProfileStore
 import com.arche.threply.ime.model.ImeAiMode
 import com.arche.threply.ime.model.ImeSuggestion
 import com.arche.threply.ime.model.ReplyStyle
@@ -126,6 +127,11 @@ class AiImeCoordinator(
                 }
                 val styleDescriptor = style.promptDescriptor
 
+                // Build profile snippet if enabled
+                val profileSnippet = if (PrefsManager.isProfileEnabled(context)) {
+                    UserProfileStore.get(context).toPromptSnippet()
+                } else ""
+
                 val onDelta: suspend (String) -> Unit = { deltaText ->
                     val current = _state.value.streamingPreview
                     _state.value = _state.value.copy(
@@ -139,13 +145,17 @@ class AiImeCoordinator(
                         context = context,
                         inputContext = input,
                         styleDescriptor = styleDescriptor,
+                        profileSnippet = profileSnippet,
                         onDelta = onDelta
                     )
                 } else {
                     val tone = if (mode == ImeAiMode.TRANSLATE) 0 else 1
+                    val contextWithProfile = if (profileSnippet.isNotBlank()) {
+                        "$profileSnippet\n\n$input"
+                    } else input
                     BackendAiApi.generateBaseRepliesStream(
                         context = context,
-                        inputContext = input,
+                        inputContext = contextWithProfile,
                         tone = tone,
                         styleDescriptor = styleDescriptor,
                         styleTemperature = style.temperature,
@@ -291,6 +301,10 @@ class AiImeCoordinator(
                 )
                 val styleDescriptor = style.promptDescriptor
 
+                val profileSnippet = if (PrefsManager.isProfileEnabled(context)) {
+                    UserProfileStore.get(context).toPromptSnippet()
+                } else ""
+
                 val onDelta: suspend (String) -> Unit = { deltaText ->
                     val current = _state.value.streamingPreview
                     _state.value = _state.value.copy(
@@ -306,6 +320,7 @@ class AiImeCoordinator(
                         parentText = parentText,
                         rootContext = rootCtx,
                         styleDescriptor = styleDescriptor,
+                        profileSnippet = profileSnippet,
                         onDelta = onDelta
                     )
                 } else {

@@ -13,8 +13,27 @@ val syncRimeAssets by tasks.registering(Copy::class) {
     exclude(".git/**", ".github/**", ".gitignore", "README*", "**/.DS_Store")
 }
 
+val verifyNoPrebuiltRimeJni by tasks.registering {
+    doLast {
+        val conflicts = fileTree("src/main/jniLibs") {
+            include("**/librime_jni.so")
+        }.files
+        if (conflicts.isNotEmpty()) {
+            error(
+                buildString {
+                    appendLine("Do not place prebuilt librime_jni.so into app/src/main/jniLibs.")
+                    appendLine("The app must package the JNI bridge built from app/src/main/cpp/rime_jni.cpp.")
+                    appendLine("Conflicting files:")
+                    conflicts.forEach { appendLine(" - ${it.absolutePath}") }
+                }
+            )
+        }
+    }
+}
+
 tasks.matching { it.name == "preBuild" }.configureEach {
     dependsOn(syncRimeAssets)
+    dependsOn(verifyNoPrebuiltRimeJni)
 }
 
 android {
@@ -25,8 +44,8 @@ android {
         applicationId = "com.arche.threply"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "1.1.0"
 
         buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"REPLACE_WITH_GOOGLE_WEB_CLIENT_ID\"")
 

@@ -1,215 +1,89 @@
-# Threply 键盘功能对照表
+# iOS / Android 键盘功能对比表
 
-> iOS 端（ThreplyKeyboard / KeyboardKit）vs Android 端（ThreplyInputMethodService）
->
-> 生成日期：2026-03-14
+更新时间：2026-03-16
 
----
+范围说明：
+- 只比较当前代码库里的键盘能力，不比较主 App 页面。
+- Android 侧主要依据：`app/src/main/java/com/arche/threply/ime/ThreplyInputMethodService.kt`、`ImeAiOverlay.kt`、`AiImeCoordinator.kt`、`RimeEngineController.kt`、`RimeNativeBridge.kt`。
+- iOS 侧主要依据：`../threply/threply/ThreplyKeyboard/ThreplyKeyboardView.swift`、`ThreplyCandidateBar.swift`、`ThreplyBModeView.swift`、`../threply/threply/ThreplyIntents/GenerateRepliesIntent.swift`。
 
-## 1. 基础输入层
+状态说明：
+- `完成`：当前代码里已具备完整能力。
+- `部分完成`：主能力存在，但成熟度、入口或细节弱于另一端。
+- `缺失`：当前代码里未见对应能力闭环。
 
+## 总表
 
-| 功能                | iOS 端                                 | Android 端                                    | 差异说明                         |
-| ----------------- | ------------------------------------- | -------------------------------------------- | ---------------------------- |
-| 英文字母输入            | ✅ KeyboardKit 标准键盘                    | ✅ 自定义 View 实现                                | Android 为纯手写布局，无 KeyboardKit |
-| 大小写切换（Shift）      | ✅ KeyboardKit + 手动注册防自动大写             | ✅ `isUppercase` toggle + `rebuildKeyboard()` | iOS 有专项防自动大写逻辑               |
-| Caps Lock         | ✅ KeyboardKit 原生支持                    | ❌ 未实现                                        | Android 无独立 CapsLock 键       |
-| 数字键盘              | ✅ KeyboardKit `.numeric` 类型           | ✅ `isSymbolMode` 切换                          | iOS 使用多键盘类型，Android 仅单层切换    |
-| 符号键盘              | ✅ KeyboardKit `.symbolic` + 全宽字符映射    | ✅ 符号行内切换                                     | iOS 自动映射全角符号；Android 无全角映射   |
-| 退格键（长按连删）         | ✅ KeyboardKit `.repeat` 手势            | ✅ Handler + postDelayed(50ms)                | 实现方式不同，功能等效                  |
-| 回车/确认键（多态 label）  | ✅ KeyboardKit `.primary` + IME Action | ✅ `EditorInfo.IME_MASK_ACTION` 动态 label      | 功能等效                         |
-| 空格键               | ✅ KeyboardKit `.space`                | ✅ 拼音时自动上屏首候选                                 | 功能等效                         |
-| 长按 Callout 次选字符   | ✅ KeyboardKit Action Callout（仅激活时显示）  | ❌ 未实现                                        | Android 无长按 callout          |
-| 按键 Hint 字符（右上角提示） | ❌ 无                                   | ✅ 每键右上角显示 hint 字符                            | Android 有，iOS 无              |
-| 按键按下视觉反馈          | ✅ KeyboardKit 内置                      | ⚠️ 无按下高亮动画                                   | Android 缺按键按下态               |
+| 功能项 | iOS | Android | 结论 |
+| --- | --- | --- | --- |
+| 基础英文/中文键盘输入 | 完成 | 完成 | 双端基础输入能力已对齐。 |
+| 中文标点优先布局 / 全角标点映射 | 完成 | 完成 | 双端都支持中文标点优先与全角标点映射。 |
+| Rime 中文输入主链路 | 完成 | 部分完成 | Android 已接入 Native Rime 和完整 `RimeResources`，但当前仍带 async warm-up、fallback 兜底、仅 `arm64-v8a`，成熟度弱于 iOS。 |
+| Rime schema 切换 | 完成 | 完成 | 双端都已支持切换方案；Android 在主 App 里暴露 schema 设置。 |
+| 候选栏基础候选展示 | 完成 | 完成 | 双端都有候选栏。 |
+| 候选栏元数据（label/comment/highlightedIndex） | 完成 | 缺失 | iOS 候选项保留 `label/comment/highlightedIndex`；Android 当前基本只展示文本 chip，候选信息密度较低。 |
+| 候选展开面板 | 完成 | 完成 | Android 已补齐展开候选面板，不再是旧文档里的缺口。 |
+| 候选展开面板交互精细度 | 完成 | 部分完成 | iOS 有 `fitCount`、高亮索引和更完整的候选栏状态；Android 当前是固定 4 列网格，交互较粗。 |
+| Skills 工具栏 | 完成 | 部分完成 | iOS 有 `Translate / Replace / Polish / Kaomoji / Memes`；Android 当前只有 `Translate / Replace / Polish`。 |
+| Replace / Polish 后撤销 | 完成 | 完成 | Android 已有 undo bar，不再落后。 |
+| 键盘内翻译模式 | 完成 | 完成 | 双端都支持键盘内翻译。 |
+| B 模式基础三回复 | 完成 | 完成 | 双端都有基础三卡片回复。 |
+| B 模式长按展开回复树 | 完成 | 完成 | Android 已补齐长按展开，不再缺失。 |
+| B 模式返回上一层 | 完成 | 完成 | Android 已补齐 reply tree back。 |
+| C 模式风格面板 | 完成 | 完成 | 双端都支持风格坐标面板。 |
+| 键盘内 AI 面板（B/C/翻译切换） | 完成 | 完成 | 双端都有独立 AI 面板。 |
+| 键盘内扫描 / OCR 触发入口 | 部分完成 | 完成 | iOS 键盘主要消费 Shortcut/AppIntent 回灌结果；Android 键盘内有显式“扫描”入口，并接了截图/Accessibility OCR 闭环。 |
+| 系统级 Shortcut / AppIntent 联动键盘 | 完成 | 缺失 | iOS 有 `SharedTrigger + GenerateRepliesIntent` 闭环；Android 当前未见同级别系统快捷指令链路。 |
+| 键盘内 Pro / 订阅门控 | 完成 | 缺失 | iOS 键盘内有 B 模式锁定和订阅跳转；Android 当前 `isAiAccessAllowed()` 直接返回 `true`，仍是测试态。 |
+| 键盘内订阅跳转反馈 | 完成 | 缺失 | iOS 已接 paywall jump；Android 键盘内未见同级闭环。 |
+| 用户画像驱动 AI 回复 | 部分完成 | 完成 | Android 键盘回复 prompt 已注入 `UserProfileStore.toPromptSnippet()`；iOS 当前代码里能看到画像采集/存储，但未见键盘回复链路显式注入。 |
+| 触感反馈丰富度 | 完成 | 部分完成 | iOS 有较完整的 `tap / select / confirm / longPress / togglePulse` 等模式；Android 当前主要是基础振动工具。 |
+| 键盘 callout / 长按视觉反馈 | 完成 | 缺失 | iOS 键盘已有 callout 风格体系；Android 当前未见同级别按键 callout 体验。 |
+| 大小写 / Shift 状态细节 | 完成 | 部分完成 | Android 目前主要是简单 `isUppercase` toggle；iOS 键盘整体状态机更成熟。 |
 
+## 结论
 
----
+### 1. 安卓已经追平或基本追平的项
 
-## 2. 中文输入（拼音 + Rime 引擎）
+- 候选展开面板
+- Replace / Polish 撤销
+- B 模式回复树展开
+- B 模式返回上一层
+- C 模式
+- 键盘内翻译模式
+- Native Rime + 完整 `RimeResources` 的接入链路
 
+这意味着旧版本认知里“Android 键盘只有基础能力、很多核心功能没做完”已经不成立。
 
-| 功能                   | iOS 端                                         | Android 端                                        | 差异说明                            |
-| -------------------- | --------------------------------------------- | ------------------------------------------------ | ------------------------------- |
-| 拼音输入模式               | ✅ Rime 引擎驱动（RimeKit / librime）                | ✅ `PinyinComposer` + `RimeEngineController`      |                                 |
-| Rime Native 引擎       | ✅ 完整 RimeKit，稳定可用                             | ⚠️ JNI 桥接，可选，加载失败自动 fallback                     | Android native Rime 不稳定，为可选状态   |
-| 候选词条显示               | ✅ `ThreplyCandidateBar` 横向滚动列表                | ✅ `suggestionContainer` 水平 LinearLayout          | iOS 实现更完整（滚动、高亮索引）              |
-| 候选词展开全屏面板            | ✅ `ThreplyCandidateExpandedPanel` 网格展开        | ❌ 未实现                                            | Android 无展开面板                   |
-| 候选词真正滚动              | ✅ `CandidateCarouselView`（UICollectionView）   | ⚠️ 固定显示最多 5 个，无真正滚动                              | Android 候选词 UI 简陋               |
-| 候选词高亮当前项             | ✅ `highlightedIndex` 高亮                       | ❌ 无高亮                                            |                                 |
-| 候选词 label/comment 显示 | ✅ `CandidateItem.label` + `comment`           | ❌ 无 label/comment                                |                                 |
-| 分页翻页                 | ✅ Rime 引擎原生分页                                 | ✅ 「‹」/「›」按钮 + `pinyinPage`                       | 机制不同，功能等效                       |
-| 内联合成文本（Marked Text）  | ✅ `proxy.setMarkedText` 真正 marked text        | ⚠️ 仅 `streamingPreviewView` 文字显示                 | Android 无真正 marked text，体验较差    |
-| 拼音 Backspace 删字母     | ✅ `RimeActionHandler` 处理                      | ✅ `PinyinComposer.pop()`                         | 功能等效                            |
-| Rime Schema 可配置      | ✅ `RimeBootstrapper` + App Group UserDefaults | ✅ `PrefsManager.getImeRimeSchema()`              | 功能等效                            |
-| Fallback 词库          | ✅ Rime 内置完整词库                                 | ✅ `RimeFallbackLexicon` + `PinyinComposer` 静态小词典 | Android fallback 词库极小（仅约 20 词组） |
-| 自动大写禁用（中文模式）         | ✅ `syncAutocapitalizationOverride` 专项逻辑       | ❌ 未实现                                            | Android 中文模式仍可能触发系统自动大写         |
-| Emoji 候选词            | ✅ Rime Schema 可返回 Emoji                       | ❌ 未实现                                            |                                 |
-| 外部文本变化重置输入状态         | ✅ `syncRimeCompositionWithHostContext`        | ❌ 未实现                                            | Android 外部文本变化不清除拼音输入缓冲         |
-| 用户词库/个性化学习           | ❌ 未实现                                         | ❌ 未实现                                            | 双端均缺失                           |
+### 2. 安卓当前仍落后 iOS 的重点
 
+- 候选栏信息密度与精细度仍弱，缺少 `label/comment/highlightedIndex` 这一层表现。
+- Skills 工具栏仍少 `Kaomoji` 和 `Memes`。
+- 键盘内 Pro / 订阅 / paywall 闭环还没恢复，当前仍是放开测试态。
+- 系统级 Shortcut / AppIntent 联动能力明显弱于 iOS。
+- 触感、callout、大小写状态机这类键盘交互细节仍弱于 iOS。
+- Android 的 Native Rime 现状虽然已接通，但稳定性和成熟度仍低于 iOS。
 
----
+### 3. 安卓当前领先 iOS 的项
 
-## 3. 语言切换
+- 键盘内直接“扫描”入口与 Accessibility OCR 闭环更完整。
+- 键盘 AI 回复已接入用户画像 prompt 注入，个性化能力走得比 iOS 键盘更前。
 
+## 最终判断
 
-| 功能            | iOS 端                                    | Android 端                              | 差异说明              |
-| ------------- | ---------------------------------------- | -------------------------------------- | ----------------- |
-| 中英文切换         | ✅ Rime ASCII Mode（`isASCIIMode`）切换       | ✅ `toggleInputLanguage()`              | 实现机制不同，功能等效       |
-| 切换按钮 label    | ✅ AI sparkle 按钮旁（底行）                     | ✅ 底行右侧「中/英」按钮                          | 位置不同，功能等效         |
-| 语言偏好持久化       | ✅ App Group UserDefaults                 | ✅ `PrefsManager.setImeInputLanguage()` | 功能等效              |
-| 符号/数字键盘全宽字符映射 | ✅ `layoutWithFullwidthCharacters()` 自动处理 | ❌ 未实现                                  | Android 符号模式无全角字符 |
-| 中文标点自动替换      | ✅ `layoutWithPunctuationRow()`（。，、？！）    | ❌ 未实现                                  | Android 无中文标点自动替换 |
-| 双语切换时清除拼音缓冲   | ✅ Rime ASCII 模式切换时自动清除                   | ✅ `pinyinComposer.clear()`             | 功能等效              |
+如果只看“有没有这项功能”，Android 键盘已经不是大幅落后状态，很多历史缺口都已经补上。
 
+如果看“产品完成度和键盘细节”，Android 仍然落后 iOS，主要差在：
+- 候选栏精细化
+- 付费门控闭环
+- 技能栏丰富度
+- 快捷指令联动
+- 触感与按键交互细节
+- Rime 运行成熟度
 
----
-
-## 4. AI 功能 — B 模式（回复建议）
-
-
-| 功能                 | iOS 端                                               | Android 端                                  | 差异说明                           |
-| ------------------ | --------------------------------------------------- | ------------------------------------------ | ------------------------------ |
-| B 模式入口             | ✅ 底行 sparkle（✦）按钮 toggle                            | ✅ AI 面板 B Chip 按钮                          |                                |
-| 生成 3 条回复建议         | ✅ 卡片式，支持流式逐字动画                                      | ✅ `BModePanel` 卡片 + shimmer + 逐字动画         | 功能等效                           |
-| SSE 流式推流           | ✅ 完整 SSE 解析 + 自动降级非流式                               | ✅ 支持 streaming delta 回调                    | 功能等效                           |
-| 逐字打字动画             | ✅ 18ms/字 + 随机触觉反馈                                   | ✅ 18ms/字（无触觉）                              | Android 逐字动画缺触觉配合              |
-| 回复树（长按展开子回复）       | ✅ `handleLongPress` 生成子树，支持多层                       | ❌ 未实现                                      | Android 无回复树，无子回复展开            |
-| 树层级返回              | ✅ `handleBack` 返回上一层                                | ❌ 未实现                                      |                                |
-| 刷新建议               | ✅ 刷新按钮 `onRefresh`                                  | ✅ `triggerAiFromCurrentInput()`            | 功能等效                           |
-| 点击建议直接插入           | ✅ `insertSuggestion`                                | ✅ `commitSuggestion`                       | 功能等效                           |
-| Pro 订阅门控           | ✅ `isBModeLocked` + Paywall 界面                      | ⚠️ 代码预留（`isAiAccessAllowed` 恒 true）        | Android 目前无权限控制                |
-| Paywall 跳转主 App    | ✅ `extensionContext.open(paywallURL)`               | ❌ 未实现                                      |                                |
-| 建议选择历史记录           | ✅ `recordSuggestionSelection` + `ReplyHistoryStore` | ❌ 未实现                                      |                                |
-| 展开建议历史记录           | ✅ `recordExpandedReplies`                           | ❌ 未实现                                      |                                |
-| DeepSeek 直连 API    | ✅ `DeepSeekKeyboardAPI`                             | ✅ `DeepSeekDirectApi`                      | 功能等效                           |
-| 后端 API（需登录）        | ✅ Bearer Token + 自动刷新                               | ✅ `BackendAiApi` + Session Store           | 功能等效                           |
-| 上下文草稿同步（跨 App）     | ✅ `SharedSuggestions.saveUserDraft()`               | ⚠️ `PrefsManager.setImeLastInputContext()` | iOS 实现更完整（含 host bundle ID 记录） |
-| Shortcut/Intent 触发 | ✅ `SharedTrigger` + Darwin 通知机制                     | ✅ `SharedTriggerStore` + SharedPreferences | 功能等效，机制不同                      |
-
-
----
-
-## 5. AI 功能 — C 模式（风格控制）
-
-
-| 功能             | iOS 端                             | Android 端                      | 差异说明          |
-| -------------- | --------------------------------- | ------------------------------ | ------------- |
-| 2D 拖拽风格板       | ✅ `CModeKeyboardCard`（210dp 高）    | ✅ `CModePanel`（180dp 高）        | 功能等效，高度略有差异   |
-| 长度轴（更长/更短）     | ✅ X 轴，-1 ~ +1                     | ✅ X 轴，-1 ~ +1                  | 等效            |
-| 温度轴（温暖/克制）     | ✅ Y 轴，-1 ~ +1                     | ✅ Y 轴，-1 ~ +1                  | 等效            |
-| 动态混色 Accent 颜色 | ✅ 四角混色（橙/绿/蓝/紫）                   | ✅ 四角混色（同算法）                    | 等效            |
-| 网格点场动画         | ✅ `DotFieldView`（SwiftUI Canvas）  | ✅ Android Canvas 逐点绘制          | 等效            |
-| 拖拽格点触觉反馈       | ✅ 每过一格触发 `Haptics.select()`       | ❌ 无触觉反馈                        | Android 缺拖拽触觉 |
-| 风格状态描述文字       | ✅ 英文描述（"long and warm"）           | ✅ 中文描述（"更长，语气更温暖"）             | 语言不同，功能等效     |
-| 风格持久化          | ✅ `SharedSuggestions.saveStyle()` | ✅ `PrefsManager.setImeStyle()` | 功能等效          |
-| 确认后重新生成回复      | ✅ `applyStyleAndRegenerate`       | ✅ `onStyleConfirm` 回调          | 功能等效          |
-| 退出 C 模式        | ✅ ✕ 按钮返回 B 模式                     | ✅ 切换 B/C Chip                  |               |
-
-
----
-
-## 6. AI 技能栏（Toolbar Skills）
-
-
-| 功能                      | iOS 端                                             | Android 端                                | 差异说明                 |
-| ----------------------- | ------------------------------------------------- | ---------------------------------------- | -------------------- |
-| 技能栏入口（/ 按钮）             | ✅ 候选栏左侧 / 按钮                                      | ❌ 未实现                                    | Android 无 Skills 技能栏 |
-| 翻译（Translate）           | ✅ 选中文本 → 选语言对 → 确认替换                              | ⚠️ `triggerSkill(TRANSLATE)` 有实现，无 UI 入口 | Android 有逻辑，无界面入口    |
-| 替换（Replace）             | ✅ 选中文本 → AI 重写 → 可 Undo                           | ⚠️ `triggerSkill(REPLACE)` 有实现，无 UI 入口   | 同上                   |
-| 润色（Polish）              | ✅ 选中文本 → AI 润色 → 可 Undo                           | ⚠️ `triggerSkill(POLISH)` 有实现，无 UI 入口    | 同上                   |
-| 操作 Undo（Replace/Polish） | ✅ `ReplaceUndoContext` / `PolishUndoContext` 一步撤销 | ❌ 未实现                                    |                      |
-| 颜文字（Kaomoji）            | ✅ 技能栏占位（后端未实现）                                    | ❌ 未实现                                    | 双端均为占位               |
-| Meme 表情                 | ✅ 技能栏占位（后端未实现）                                    | ❌ 未实现                                    | 双端均为占位               |
-| 文本选中自动弹出技能栏             | ✅ `updateSelectionStateIfNeeded` 自动切换 skills 模式   | ❌ 未实现                                    | Android 无选中文本自动联动    |
-| 翻译语言选择 UI               | ✅ 候选栏内 Menu 选择器（8 种语言）                            | ❌ 未实现                                    |                      |
-
-
----
-
-## 7. 聊天扫描（Chat Scan / OCR）
-
-
-| 功能          | iOS 端                                     | Android 端                                                  | 差异说明       |
-| ----------- | ----------------------------------------- | ---------------------------------------------------------- | ---------- |
-| 聊天内容扫描入口    | ✅ B 模式面板「扫描」按钮                            | ✅ ImeAiOverlay「扫描」按钮                                       | 功能等效       |
-| 扫描实现方式      | ✅ App Intents / Shortcut（`SharedTrigger`） | ✅ `ChatScanAccessibilityService` 辅助功能服务                    | 机制不同       |
-| OCR 引擎      | ❌ 不在键盘内（由主 App 处理）                        | ✅ `OcrEngine` + `ScreenshotMonitorService`                 | Android 独有 |
-| 截图自动监听      | ❌ 不在键盘内                                   | ✅ `ScreenshotContentObserver` + `ScreenshotMonitorService` | Android 独有 |
-| 扫描结果回传键盘    | ✅ Darwin 通知 + `SharedSuggestions`         | ✅ `BroadcastReceiver`（`ACTION_SCAN_RESULT`）                | 机制不同，功能等效  |
-| 扫描结果解析为建议列表 | ✅ 由 Intents/主 App 处理                      | ✅ 按行解析为 `ImeSuggestion` 列表                                 |            |
-
-
----
-
-## 8. 触觉反馈（Haptics）
-
-
-| 功能            | iOS 端                                | Android 端                                       | 差异说明     |
-| ------------- | ------------------------------------ | ----------------------------------------------- | -------- |
-| 触觉引擎          | ✅ CoreHaptics `CHHapticEngine` 常驻实例  | ✅ `VibrationEffect` / `HapticFeedbackConstants` | iOS 精度更高 |
-| 按键轻触（tap）     | ✅ `Haptics.tap()` intensity 0.35     | ✅ `KEYBOARD_TAP`                                | 功能等效     |
-| 选择反馈（select）  | ✅ `Haptics.select()` intensity 0.45  | ✅ `GESTURE_START` / `CLOCK_TICK`                | 功能等效     |
-| 确认反馈（confirm） | ✅ `Haptics.confirm()` intensity 0.8  | ✅ `EFFECT_HEAVY_CLICK`                          | 功能等效     |
-| Toggle 双脉冲    | ✅ `Haptics.togglePulse()`（双脉冲 0.08s） | ❌ 未实现                                           |          |
-| 长按持续振动        | ✅ `Haptics.longPress()`（0.18s 连续）    | ❌ 未实现                                           |          |
-| 强度可调节         | ✅ App Group `hapticStrength` 0~1 浮点  | ✅ `PrefsManager` 开关 + 强度配置                      | 功能等效     |
-| 逐字动画配合触觉      | ✅ 每 2~4 字触发一次 tap                    | ❌ 无触觉配合                                         |          |
-| C 模式拖拽格点触觉    | ✅ 每过一格触发                             | ❌ 未实现                                           |          |
-
-
----
-
-## 9. 键盘生命周期 & 稳定性
-
-
-| 功能                | iOS 端                                 | Android 端                             | 差异说明                         |
-| ----------------- | ------------------------------------- | ------------------------------------- | ---------------------------- |
-| 键盘视图创建失败兜底        | ✅ KeyboardKit 框架保障                    | ✅ `createEmergencyInputView()` 紧急键盘   |                              |
-| Compose 生命周期管理    | N/A（SwiftUI 原生）                       | ✅ `ImeLifecycleOwner` 自定义生命周期         |                              |
-| 协程/异步资源管理         | ✅ Swift Task 结构化并发                    | ✅ `imeScope(SupervisorJob)` 取消管理      | 功能等效                         |
-| AI 请求取消（切换/退出）    | ✅ `Task.cancel()`                     | ✅ `aiCoordinator.cancel()`            | 功能等效                         |
-| 全屏模式禁用            | ✅ `onEvaluateFullscreenMode` 返回 false | ✅ `onEvaluateFullscreenMode` 返回 false | 功能等效                         |
-| 强制显示软键盘           | ✅ `onEvaluateInputViewShown` 返回 true  | ✅ `onEvaluateInputViewShown` 返回 true  | 功能等效                         |
-| Full Access 检测与同步 | ✅ `syncFullAccessToAppGroup()`        | ❌ 未实现（Android 无此概念）                   |                              |
-| 调试日志系统            | ✅ `KeyboardLogStore` 主 App 内可查看       | ✅ Logcat + Log.TAG                    | iOS 日志可持久查阅；Android 仅 Logcat |
-
-
----
-
-## 10. 配置与设置
-
-
-| 功能                  | iOS 端                                                | Android 端                                           | 差异说明          |
-| ------------------- | ---------------------------------------------------- | --------------------------------------------------- | ------------- |
-| 自动句末标点（双空格）         | ✅ `ThreplyKeyboardBehavior.shouldEndCurrentSentence` | ❌ 未实现                                               |               |
-| 惯用手设置               | ✅ `handedness` UserDefaults                          | ✅ `PrefsManager.getHandedness()`                    | 功能等效          |
-| 语言偏好                | ✅ `languagePreference`                               | ✅ `PrefsManager.getLanguagePreference()`            | 功能等效          |
-| 后端 Base URL 可配置     | ✅ App Group UserDefaults                             | ✅ `PrefsManager.getBackendBaseURL()`                | 功能等效          |
-| DeepSeek API Key 配置 | ✅ KeychainManager（Keychain 安全存储）                     | ✅ `PrefsManager`（SharedPreferences）                 | iOS 存储更安全     |
-| Pro 订阅状态            | ✅ StoreKit + `SharedAccountStatus.isProEntitled()`   | ✅ `BillingManager` + `PrefsManager.isProEntitled()` | 功能等效          |
-| Rime Native 开关      | ✅ `RimeBootstrapper.isRimeEnabled()`                 | ✅ `PrefsManager.isImeRimeNativeEnabled()`           | 功能等效          |
-| AI 功能总开关            | ✅ 隐式（Pro 门控）                                         | ✅ `PrefsManager.isImeAiEnabled()`                   | Android 有独立开关 |
-
-
----
-
-## 11. 总结：功能覆盖率估算
-
-
-| 分类          | iOS 端功能数 | Android 已实现 | 覆盖率      |
-| ----------- | -------- | ----------- | -------- |
-| 基础输入层       | 11       | 8           | ~73%     |
-| 中文输入 / Rime | 16       | 9           | ~56%     |
-| 语言切換        | 6        | 4           | ~67%     |
-| AI B 模式     | 16       | 10          | ~63%     |
-| AI C 模式     | 10       | 8           | ~80%     |
-| AI 技能栏      | 9        | 1           | ~11%     |
-| 聊天扫描        | 6        | 5           | ~83%     |
-| 触觉反馈        | 9        | 5           | ~56%     |
-| 生命周期 & 稳定性  | 8        | 6           | ~75%     |
-| 配置与设置       | 8        | 7           | ~88%     |
-| **合计**      | **99**   | **63**      | **~64%** |
-
-
+如果下一轮要优先补齐 iOS 差距，建议按这个顺序：
+1. 恢复键盘内 Pro / paywall 闭环
+2. 补齐候选栏元数据与交互细节
+3. 补 `Kaomoji / Memes`
+4. 补系统级快捷指令触发链路
+5. 继续打磨 Native Rime 运行稳定性与候选体验

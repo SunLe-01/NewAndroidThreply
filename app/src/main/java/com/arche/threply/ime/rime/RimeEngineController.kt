@@ -40,7 +40,10 @@ class RimeEngineController {
             }
 
             initialized = true
-            Log.i(TAG, "Initialized: schema=$schema, nativeEnabled=${this.nativeEnabled}")
+            Log.i(
+                TAG,
+                "Initialized: schema=$schema, nativeRequested=$nativeEnabled, nativeReady=${nativeBridge.isNativeReady()}"
+            )
             initialized
         } catch (e: Exception) {
             Log.e(TAG, "Failed to initialize", e)
@@ -126,7 +129,11 @@ class RimeEngineController {
                     .filterNot { looksLikePlaceholderPinyinCandidate(normalized, it) }
                     .distinct()
                     .toList()
-                if (nativeCandidates.isNotEmpty()) return nativeCandidates
+                if (nativeCandidates.isNotEmpty()) {
+                    return nativeCandidates
+                }
+            } else {
+                Log.v(TAG, "suggestFromPinyin: native unavailable, using fallback lexicon")
             }
 
             RimeFallbackLexicon.lookup(normalized, limit = 8, page = pinyinPage)
@@ -155,7 +162,36 @@ class RimeEngineController {
 
     fun currentPinyinPage(): Int = pinyinPage
 
-    fun isNativeEngineActive(): Boolean = nativeEnabled && nativeBridge.isNativeAvailable()
+    fun isNativeEngineActive(): Boolean =
+        nativeEnabled && nativeBridge.isNativeAvailable() && nativeBridge.isNativeReady()
 
     fun currentSchema(): String = currentSchema
+
+    /** Full diagnostic status for developer UI. */
+    data class DiagnosticStatus(
+        val initialized: Boolean,
+        val nativeEnabled: Boolean,
+        val nativeActive: Boolean,
+        val currentSchema: String,
+        val libraryLoaded: Boolean,
+        val nativeInitializing: Boolean,
+        val nativeReady: Boolean,
+        val sharedDataDir: String,
+        val userDataDir: String
+    )
+
+    fun getDiagnosticStatus(): DiagnosticStatus {
+        val bridge = nativeBridge.getDiagnosticStatus()
+        return DiagnosticStatus(
+            initialized = initialized,
+            nativeEnabled = nativeEnabled,
+            nativeActive = isNativeEngineActive(),
+            currentSchema = currentSchema,
+            libraryLoaded = bridge.libraryLoaded,
+            nativeInitializing = bridge.nativeInitializing,
+            nativeReady = bridge.nativeReady,
+            sharedDataDir = bridge.sharedDataDir,
+            userDataDir = bridge.userDataDir
+        )
+    }
 }

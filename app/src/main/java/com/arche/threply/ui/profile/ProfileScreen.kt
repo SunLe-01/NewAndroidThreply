@@ -35,6 +35,12 @@ fun ProfileScreen(
     var backendBaseURL by remember { mutableStateOf(PrefsManager.getBackendBaseURL(context)) }
     var languagePreference by remember { mutableStateOf(PrefsManager.getLanguagePreference(context)) }
     var handedness by remember { mutableStateOf(PrefsManager.getHandedness(context)) }
+    var showPersonaScreen by remember { mutableStateOf(false) }
+
+    if (showPersonaScreen) {
+        ProfilePersonaScreen(onBack = { showPersonaScreen = false })
+        return
+    }
 
     Column(
         modifier = Modifier
@@ -170,6 +176,31 @@ fun ProfileScreen(
                         PrefsManager.setHandedness(context, it)
                     }
                 )
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        // ─── AI Persona ───
+        Text("AI 个性化", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color.White.copy(alpha = 0.6f), modifier = Modifier.padding(bottom = 8.dp))
+
+        Card(
+            colors = CardDefaults.cardColors(containerColor = ThreplyColors.glassSurface),
+            modifier = Modifier.fillMaxWidth(),
+            onClick = { showPersonaScreen = true }
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("用户形象", fontSize = 15.sp, color = Color.White)
+                    Text("管理兴趣、口头禅、语气偏好", fontSize = 12.sp, color = Color.White.copy(alpha = 0.5f))
+                }
+                Text("›", fontSize = 20.sp, color = Color.White.copy(alpha = 0.5f))
             }
         }
 

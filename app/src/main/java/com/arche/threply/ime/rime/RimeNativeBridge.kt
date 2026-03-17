@@ -3,6 +3,8 @@ package com.arche.threply.ime.rime
 import android.os.Build
 import android.util.Log
 import java.io.File
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * JNI bridge for native Rime engine.
@@ -62,6 +64,15 @@ internal class RimeNativeBridge {
         }
     }
 
+    private val nativeInitExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "RimeNativeInit").apply { isDaemon = true }
+    }
+    private val initGeneration = AtomicInteger(0)
+
+    @Volatile
+    private var nativeInitializing = false
+
+    @Volatile
     private var nativeReady = false
     private var currentSchema = "luna_pinyin"
     private var sharedDataDir = ""
@@ -72,6 +83,25 @@ internal class RimeNativeBridge {
     }
 
     fun isNativeAvailable(): Boolean = loadSucceeded
+
+    /** Diagnostic status for developer UI / logging. */
+    data class DiagnosticStatus(
+        val libraryLoaded: Boolean,
+        val nativeInitializing: Boolean,
+        val nativeReady: Boolean,
+        val currentSchema: String,
+        val sharedDataDir: String,
+        val userDataDir: String
+    )
+
+    fun getDiagnosticStatus(): DiagnosticStatus = DiagnosticStatus(
+        libraryLoaded = loadSucceeded,
+        nativeInitializing = nativeInitializing,
+        nativeReady = nativeReady,
+        currentSchema = currentSchema,
+        sharedDataDir = sharedDataDir,
+        userDataDir = userDataDir
+    )
 
     fun initialize(schema: String, sharedDataDir: String, userDataDir: String): Boolean {
         if (!loadSucceeded) {
@@ -93,20 +123,45 @@ internal class RimeNativeBridge {
             return false
         }
 
+        val sameDirs = this.sharedDataDir == sharedDataDir && this.userDataDir == userDataDir
+        val sameSchema = currentSchema == schema
+        if (sameDirs && nativeReady) {
+            currentSchema = schema
+            if (!sameSchema) {
+                Log.i(TAG, "Native already ready, reusing runtime for schema=$schema")
+            }
+            return true
+        }
+        if (sameDirs && sameSchema && nativeInitializing) {
+            Log.i(TAG, "Native initialize already in flight for schema=$schema")
+            return true
+        }
+
         currentSchema = schema
         this.sharedDataDir = sharedDataDir
         this.userDataDir = userDataDir
+        val generation = initGeneration.incrementAndGet()
+        nativeInitializing = true
+        nativeReady = false
+        Log.i(TAG, "Scheduling native initialize: schema=$schema, generation=$generation")
+        nativeInitExecutor.execute {
+            val result = try {
+                nativeInitialize(schema, sharedDataDir, userDataDir)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to initialize native Rime", e)
+                false
+            }
 
-        return try {
-            val result = nativeInitialize(schema, sharedDataDir, userDataDir)
+            if (initGeneration.get() != generation) {
+                Log.i(TAG, "Discarding stale native initialize result: generation=$generation, result=$result")
+                return@execute
+            }
+
             nativeReady = result
-            Log.i(TAG, "Native initialize: schema=$schema, result=$result")
-            result
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to initialize native Rime", e)
-            nativeReady = false
-            false
+            nativeInitializing = false
+            Log.i(TAG, "Native initialize finished: schema=$schema, generation=$generation, result=$result")
         }
+        return true
     }
 
     fun onStartInput() {
@@ -128,6 +183,8 @@ internal class RimeNativeBridge {
     }
 
     fun release() {
+        initGeneration.incrementAndGet()
+        nativeInitializing = false
         if (!nativeReady) return
         try {
             nativeRelease()
@@ -137,6 +194,8 @@ internal class RimeNativeBridge {
             nativeReady = false
         }
     }
+
+    fun isNativeReady(): Boolean = nativeReady
 
     fun queryCandidates(input: String, limit: Int, page: Int = 0): List<String> {
         if (!nativeReady) return emptyList()

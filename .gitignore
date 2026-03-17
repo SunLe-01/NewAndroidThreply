@@ -1,6 +1,7 @@
 .gradle/
 .gradle-user-home/
 .idea/
+.codex-tmp/
 local.properties
 /build/
 **/build/

@@ -25,6 +25,8 @@ import com.arche.threply.data.BackendAiApi
 import com.arche.threply.data.BackendSessionStore
 import com.arche.threply.data.DeepSeekDirectApi
 import com.arche.threply.data.PrefsManager
+import com.arche.threply.data.profile.ReplyHistoryEntry
+import com.arche.threply.data.profile.ReplyHistoryStore
 import com.arche.threply.ime.ai.AiImeCoordinator
 import com.arche.threply.ime.model.ImeAiMode
 import com.arche.threply.ime.model.ImeSuggestion
@@ -103,7 +105,11 @@ class ThreplyInputMethodService : InputMethodService() {
 
     private var lastSelStart = -1
     private var lastSelEnd = -1
-    private var isSettingComposingText = false
+    private var pendingComposingSelectionUpdates = 0
+    private var cachedPinyinQuery = ""
+    private var cachedPinyinCandidates: List<String> = emptyList()
+    private var pinyinCandidateRequestGeneration = 0
+    private var pinyinCandidateJob: Job? = null
 
     /** Stores undo context after a Replace/Polish operation is committed. */
     private data class UndoContext(val originalText: String, val replacedText: String, val skill: TextSkill)
@@ -217,10 +223,12 @@ class ThreplyInputMethodService : InputMethodService() {
         aiMode = ImeAiMode.fromRaw(PrefsManager.getImeAiMode(this))
         inputLanguage = readInputLanguage()
         pinyinComposer.clear()
+        clearPinyinSuggestionState()
         englishBuffer.clear()
         rimeController.resetPinyinPage()
         lastSelStart = -1
         lastSelEnd = -1
+        pendingComposingSelectionUpdates = 0
 
         runCatching {
             if (PrefsManager.isImeRimeEnabled(this)) {
@@ -266,6 +274,7 @@ class ThreplyInputMethodService : InputMethodService() {
 
     override fun onFinishInputView(finishingInput: Boolean) {
         super.onFinishInputView(finishingInput)
+        pinyinCandidateJob?.cancel()
         rimeController.onFinishInput()
     }
 
@@ -277,8 +286,8 @@ class ThreplyInputMethodService : InputMethodService() {
         super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd)
 
         // Skip processing if we're the ones setting composing text
-        if (isSettingComposingText) {
-            isSettingComposingText = false
+        if (pendingComposingSelectionUpdates > 0) {
+            pendingComposingSelectionUpdates -= 1
             lastSelStart = newSelStart
             lastSelEnd = newSelEnd
             return
@@ -289,8 +298,9 @@ class ThreplyInputMethodService : InputMethodService() {
         if (cursorMoved && inputLanguage == InputLanguage.ZH_PINYIN && pinyinComposer.currentRaw().isNotBlank()) {
             // External change detected — reset pinyin state
             pinyinComposer.clear()
+            clearPinyinSuggestionState()
             rimeController.resetPinyinPage()
-            currentInputConnection?.setComposingText("", 0)
+            setComposingTextFromIme("", 0)
             streamingPreviewView.text = ""
             updateComposingBar()
             refreshSuggestionTray()
@@ -325,6 +335,7 @@ class ThreplyInputMethodService : InputMethodService() {
 
     override fun onDestroy() {
         super.onDestroy()
+        pinyinCandidateJob?.cancel()
         stateJob?.cancel()
         aiCoordinator.cancel()
         imeScope.cancel()
@@ -515,7 +526,7 @@ class ThreplyInputMethodService : InputMethodService() {
             inputLanguage == InputLanguage.ZH_PINYIN && pinyinComposer.currentRaw().isNotBlank() -> {
                 val pinyin = pinyinComposer.currentRaw()
                 streamingPreviewView.text = "拼音：$pinyin"
-                // Fetch up to 20 candidates — all displayed via horizontal scroll, no paging needed
+                // Avoid blocking the UI thread on every keypress; native Rime resolves in background.
                 val candidates = currentPinyinCandidates(limit = 20)
                 candidates.map {
                     ImeSuggestion(text = it, source = SuggestionSource.RIME, isStreaming = false)
@@ -552,7 +563,38 @@ class ThreplyInputMethodService : InputMethodService() {
         if (pinyin.isBlank()) return emptyList()
 
         val safeLimit = limit.coerceIn(1, 30)
+        val cacheMatches = cachedPinyinQuery == pinyin
 
+        if (!cacheMatches) {
+            cachedPinyinQuery = pinyin
+            cachedPinyinCandidates = immediatePinyinCandidates(pinyin, safeLimit)
+            requestPinyinCandidatesInBackground(pinyin, safeLimit)
+        } else if (cachedPinyinCandidates.isEmpty()) {
+            cachedPinyinCandidates = immediatePinyinCandidates(pinyin, safeLimit)
+        }
+
+        return cachedPinyinCandidates.take(safeLimit)
+    }
+
+    private fun requestPinyinCandidatesInBackground(pinyin: String, limit: Int) {
+        val safeLimit = limit.coerceIn(1, 30)
+        val requestGeneration = ++pinyinCandidateRequestGeneration
+        pinyinCandidateJob?.cancel()
+        pinyinCandidateJob = imeScope.launch(Dispatchers.Default) {
+            val resolved = resolvePinyinCandidates(pinyin, safeLimit)
+            launch(Dispatchers.Main) updatePinyinCandidates@{
+                if (requestGeneration != pinyinCandidateRequestGeneration) return@updatePinyinCandidates
+                if (pinyinComposer.currentRaw().trim().lowercase() != pinyin) return@updatePinyinCandidates
+                if (cachedPinyinQuery != pinyin) return@updatePinyinCandidates
+                if (resolved == cachedPinyinCandidates) return@updatePinyinCandidates
+                cachedPinyinCandidates = resolved
+                refreshSuggestionTray()
+            }
+        }
+    }
+
+    private fun resolvePinyinCandidates(pinyin: String, limit: Int): List<String> {
+        val safeLimit = limit.coerceIn(1, 30)
         val rimeCandidates = rimeController.suggestFromPinyin(pinyin)
             .asSequence()
             .map { it.trim() }
@@ -560,8 +602,11 @@ class ThreplyInputMethodService : InputMethodService() {
             .distinct()
             .toList()
         if (rimeCandidates.isNotEmpty()) return rimeCandidates.take(safeLimit)
+        return immediatePinyinCandidates(pinyin, safeLimit)
+    }
 
-        // Fetch all candidates from fallback lexicon (page 0 only — scroll replaces pagination)
+    private fun immediatePinyinCandidates(pinyin: String, limit: Int): List<String> {
+        val safeLimit = limit.coerceIn(1, 30)
         val fallbackCandidates = RimeFallbackLexicon.lookup(
             pinyin = pinyin,
             limit = safeLimit,
@@ -569,15 +614,15 @@ class ThreplyInputMethodService : InputMethodService() {
         ).filter { containsHanOrPunctuation(it) }
         if (fallbackCandidates.isNotEmpty()) return fallbackCandidates
 
-        val localCandidates = pinyinComposer.candidates()
-            .asSequence()
-            .map { it.trim() }
-            .filter { it.isNotBlank() && containsHanOrPunctuation(it) }
-            .distinct()
-            .toList()
-        if (localCandidates.isNotEmpty()) return localCandidates.take(safeLimit)
-
         return emptyList()
+    }
+
+    private fun clearPinyinSuggestionState() {
+        pinyinCandidateJob?.cancel()
+        pinyinCandidateJob = null
+        pinyinCandidateRequestGeneration += 1
+        cachedPinyinQuery = ""
+        cachedPinyinCandidates = emptyList()
     }
 
     private fun containsHanOrPunctuation(text: String): Boolean {
@@ -1040,10 +1085,10 @@ class ThreplyInputMethodService : InputMethodService() {
         HapticsUtil.impactMedium(this)
         if (inputLanguage == InputLanguage.ZH_PINYIN && pinyinComposer.currentRaw().isNotBlank()) {
             pinyinComposer.clear()
+            clearPinyinSuggestionState()
             streamingPreviewView.text = ""
             // Clear composing text before committing the candidate
-            isSettingComposingText = true
-            currentInputConnection?.setComposingText("", 0)
+            setComposingTextFromIme("", 0)
         }
         englishBuffer.clear()
 
@@ -1064,6 +1109,25 @@ class ThreplyInputMethodService : InputMethodService() {
 
         currentInputConnection?.commitText(text, 1)
         PrefsManager.setImeLastInputContext(this, text)
+
+        // Record AI reply selection for profile inference
+        if (::aiPanelWrapper.isInitialized && aiPanelWrapper.visibility == View.VISIBLE
+            && (aiMode == ImeAiMode.B || aiMode == ImeAiMode.C)
+        ) {
+            val ctx = this
+            imeScope.launch(Dispatchers.IO) {
+                ReplyHistoryStore.append(
+                    context = ctx,
+                    entry = ReplyHistoryEntry(
+                        selectedReply = text,
+                        inputContext = PrefsManager.getImeLastInputContext(ctx),
+                        mode = aiMode.name,
+                        timestamp = System.currentTimeMillis()
+                    )
+                )
+            }
+        }
+
         updateComposingBar()
 
         // If this commit matches a pending undo context, activate undo mode
@@ -1831,22 +1895,21 @@ class ThreplyInputMethodService : InputMethodService() {
         PrefsManager.setImeLastInputContext(this, pinyinComposer.currentRaw())
         // Show composing text in the host input field
         val pinyin = pinyinComposer.currentRaw()
-        isSettingComposingText = true
-        currentInputConnection?.setComposingText(pinyin, 1)
+        setComposingTextFromIme(pinyin, 1)
         updateComposingBar()
         refreshSuggestionTray()
     }
 
     private fun handleSpaceTap() {
         if (inputLanguage == InputLanguage.ZH_PINYIN && pinyinComposer.currentRaw().isNotBlank()) {
-            val candidate = currentPinyinCandidates(limit = 1).firstOrNull()
+            val candidate = bestPinyinCandidateForCommit()
                 ?: pinyinComposer.currentRaw()
             // Clear composing text before committing the candidate
-            isSettingComposingText = true
-            currentInputConnection?.setComposingText("", 0)
+            setComposingTextFromIme("", 0)
             currentInputConnection?.commitText(candidate, 1)
             PrefsManager.setImeLastInputContext(this, candidate)
             pinyinComposer.clear()
+            clearPinyinSuggestionState()
             rimeController.resetPinyinPage()
             streamingPreviewView.text = ""
             updateComposingBar()
@@ -1884,11 +1947,11 @@ class ThreplyInputMethodService : InputMethodService() {
 
         if (inputLanguage == InputLanguage.EN) {
             pinyinComposer.clear()
+            clearPinyinSuggestionState()
             englishBuffer.clear()
             rimeController.resetPinyinPage()
             streamingPreviewView.text = ""
-            isSettingComposingText = true
-            currentInputConnection?.setComposingText("", 0)
+            setComposingTextFromIme("", 0)
         }
 
         rebuildKeyboard()
@@ -1939,12 +2002,12 @@ class ThreplyInputMethodService : InputMethodService() {
         if (inputLanguage == InputLanguage.ZH_PINYIN && pinyinComposer.currentRaw().isNotBlank()) {
             pinyinComposer.pop()
             if (pinyinComposer.currentRaw().isBlank()) {
+                clearPinyinSuggestionState()
                 rimeController.resetPinyinPage()
-                isSettingComposingText = true
-                currentInputConnection?.setComposingText("", 0)
+                setComposingTextFromIme("", 0)
             } else {
-                isSettingComposingText = true
-                currentInputConnection?.setComposingText(pinyinComposer.currentRaw(), 1)
+                clearPinyinSuggestionState()
+                setComposingTextFromIme(pinyinComposer.currentRaw(), 1)
             }
             updateComposingBar()
             refreshSuggestionTray()
@@ -1963,13 +2026,13 @@ class ThreplyInputMethodService : InputMethodService() {
 
     private fun handleEnter() {
         if (inputLanguage == InputLanguage.ZH_PINYIN && pinyinComposer.currentRaw().isNotBlank()) {
-            val candidate = currentPinyinCandidates(limit = 1).firstOrNull()
+            val candidate = bestPinyinCandidateForCommit()
                 ?: pinyinComposer.currentRaw()
             // Clear composing text before committing the candidate
-            isSettingComposingText = true
-            currentInputConnection?.setComposingText("", 0)
+            setComposingTextFromIme("", 0)
             currentInputConnection?.commitText(candidate, 1)
             pinyinComposer.clear()
+            clearPinyinSuggestionState()
             rimeController.resetPinyinPage()
             streamingPreviewView.text = ""
             updateComposingBar()
@@ -1987,6 +2050,21 @@ class ThreplyInputMethodService : InputMethodService() {
         } else {
             currentInputConnection?.commitText("\n", 1)
         }
+    }
+
+    private fun bestPinyinCandidateForCommit(): String? {
+        val pinyin = pinyinComposer.currentRaw().trim().lowercase()
+        if (pinyin.isBlank()) return null
+        if (cachedPinyinQuery == pinyin) {
+            cachedPinyinCandidates.firstOrNull()?.let { return it }
+        }
+        return immediatePinyinCandidates(pinyin, limit = 1).firstOrNull()
+    }
+
+    private fun setComposingTextFromIme(text: String, newCursorPosition: Int) {
+        val ic = currentInputConnection ?: return
+        pendingComposingSelectionUpdates += 1
+        ic.setComposingText(text, newCursorPosition)
     }
 
     private fun enterKeyLabel(): String {

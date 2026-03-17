@@ -37,6 +37,7 @@ object DeepSeekDirectApi {
         context: Context,
         inputContext: String,
         styleDescriptor: String,
+        profileSnippet: String = "",
         onDelta: suspend (String) -> Unit
     ): List<String> = withContext(Dispatchers.IO) {
         val systemPrompt = buildString {
@@ -44,6 +45,9 @@ object DeepSeekDirectApi {
             append("每条回复独占一行，不要编号，不要加引号，不要解释。")
             if (styleDescriptor.isNotBlank()) {
                 append("风格要求：$styleDescriptor")
+            }
+            if (profileSnippet.isNotBlank()) {
+                append("\n\n$profileSnippet")
             }
         }
 
@@ -58,6 +62,7 @@ object DeepSeekDirectApi {
         parentText: String,
         rootContext: String,
         styleDescriptor: String,
+        profileSnippet: String = "",
         onDelta: suspend (String) -> Unit
     ): List<String> = withContext(Dispatchers.IO) {
         val systemPrompt = buildString {
@@ -71,6 +76,9 @@ object DeepSeekDirectApi {
             append("4. 每条改写独占一行，不要编号，不要加引号，不要解释。")
             if (styleDescriptor.isNotBlank()) {
                 append("风格要求：$styleDescriptor")
+            }
+            if (profileSnippet.isNotBlank()) {
+                append("\n\n$profileSnippet")
             }
         }
 
@@ -252,5 +260,15 @@ object DeepSeekDirectApi {
         } catch (_: Exception) {
             null
         }
+    }
+
+    // ── Public: non-streaming chat for profile inference ──────────────
+
+    suspend fun chatForProfile(
+        context: Context,
+        systemPrompt: String,
+        userMessage: String
+    ): String = withContext(Dispatchers.IO) {
+        chatOnce(context, systemPrompt, userMessage, 0.3)
     }
 }

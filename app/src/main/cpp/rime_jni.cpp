@@ -29,20 +29,40 @@ bool gInitialized = false;
 #if HAS_LIBRIME
 bool gRimeRuntimeInitialized = false;
 RimeSessionId gSessionId = 0;
+RimeApi* gRimeApi = nullptr;
+
+bool ensureApiLoadedLocked() {
+    if (gRimeApi != nullptr) {
+        return true;
+    }
+    gRimeApi = rime_get_api();
+    if (gRimeApi == nullptr) {
+        LOGW("rime_get_api returned null");
+        return false;
+    }
+    return true;
+}
 
 void destroySessionLocked() {
-    if (gSessionId != 0 && RimeFindSession(gSessionId)) {
-        RimeDestroySession(gSessionId);
+    if (!ensureApiLoadedLocked() || gRimeApi->find_session == nullptr || gRimeApi->destroy_session == nullptr) {
+        gSessionId = 0;
+        return;
+    }
+    if (gSessionId != 0 && gRimeApi->find_session(gSessionId)) {
+        gRimeApi->destroy_session(gSessionId);
     }
     gSessionId = 0;
 }
 
 bool ensureSessionLocked() {
-    if (gSessionId != 0 && RimeFindSession(gSessionId)) {
+    if (!ensureApiLoadedLocked() || gRimeApi->find_session == nullptr || gRimeApi->create_session == nullptr) {
+        return false;
+    }
+    if (gSessionId != 0 && gRimeApi->find_session(gSessionId)) {
         return true;
     }
-    gSessionId = RimeCreateSession();
-    return gSessionId != 0 && RimeFindSession(gSessionId);
+    gSessionId = gRimeApi->create_session();
+    return gSessionId != 0 && gRimeApi->find_session(gSessionId);
 }
 
 bool selectSchemaLocked(const std::string& schema) {
@@ -52,7 +72,10 @@ bool selectSchemaLocked(const std::string& schema) {
     if (!ensureSessionLocked()) {
         return false;
     }
-    return RimeSelectSchema(gSessionId, schema.c_str()) == True;
+    if (gRimeApi->select_schema == nullptr) {
+        return false;
+    }
+    return gRimeApi->select_schema(gSessionId, schema.c_str()) == True;
 }
 
 bool initializeRimeLocked() {
@@ -62,19 +85,29 @@ bool initializeRimeLocked() {
     if (gSharedDataDir.empty() || gUserDataDir.empty()) {
         return false;
     }
+    if (!ensureApiLoadedLocked()) {
+        return false;
+    }
+    if (gRimeApi->setup == nullptr ||
+        gRimeApi->initialize == nullptr ||
+        gRimeApi->start_maintenance == nullptr ||
+        gRimeApi->join_maintenance_thread == nullptr) {
+        LOGW("RimeApi is missing required lifecycle functions");
+        return false;
+    }
 
     RIME_STRUCT(RimeTraits, traits);
     traits.shared_data_dir = gSharedDataDir.c_str();
     traits.user_data_dir = gUserDataDir.c_str();
     traits.app_name = "rime.threply.android";
 
-    RimeSetup(&traits);
-    RimeInitialize(&traits);
+    gRimeApi->setup(&traits);
+    gRimeApi->initialize(&traits);
     gRimeRuntimeInitialized = true;
 
     // Ensure deploy/build artifacts are generated if needed.
-    RimeStartMaintenance(False);
-    RimeJoinMaintenanceThread();
+    gRimeApi->start_maintenance(False);
+    gRimeApi->join_maintenance_thread();
 
     if (!ensureSessionLocked()) {
         return false;
@@ -87,8 +120,8 @@ bool initializeRimeLocked() {
 
 void releaseRimeLocked() {
     destroySessionLocked();
-    if (gRimeRuntimeInitialized) {
-        RimeFinalize();
+    if (gRimeRuntimeInitialized && ensureApiLoadedLocked() && gRimeApi->finalize != nullptr) {
+        gRimeApi->finalize();
     }
     gRimeRuntimeInitialized = false;
 }
@@ -97,7 +130,10 @@ bool feedPinyinLocked(const std::string& rawInput) {
     if (!ensureSessionLocked()) {
         return false;
     }
-    RimeClearComposition(gSessionId);
+    if (gRimeApi->clear_composition == nullptr || gRimeApi->process_key == nullptr) {
+        return false;
+    }
+    gRimeApi->clear_composition(gSessionId);
 
     bool handled = false;
     for (char ch : rawInput) {
@@ -109,7 +145,7 @@ bool feedPinyinLocked(const std::string& rawInput) {
         if ((normalized >= 'a' && normalized <= 'z') ||
             (normalized >= '0' && normalized <= '9') ||
             normalized == '\'') {
-            handled = RimeProcessKey(gSessionId, static_cast<int>(normalized), 0) == True || handled;
+            handled = gRimeApi->process_key(gSessionId, static_cast<int>(normalized), 0) == True || handled;
         }
     }
     return handled;
@@ -125,17 +161,22 @@ std::vector<std::string> collectCandidatesLocked(int limit, int page) {
     int safePage = std::max(page, 0);
 
     RIME_STRUCT(RimeContext, context);
-    if (!RimeGetContext(gSessionId, &context)) {
+    if (gRimeApi->get_context == nullptr ||
+        gRimeApi->free_context == nullptr ||
+        gRimeApi->process_key == nullptr) {
+        return results;
+    }
+    if (!gRimeApi->get_context(gSessionId, &context)) {
         return results;
     }
 
     while (context.menu.page_no < safePage && !context.menu.is_last_page) {
-        RimeFreeContext(&context);
-        if (RimeProcessKey(gSessionId, 0xff56, 0) != True) {  // XK_Next/PageDown
+        gRimeApi->free_context(&context);
+        if (gRimeApi->process_key(gSessionId, 0xff56, 0) != True) {  // XK_Next/PageDown
             return results;
         }
         RIME_STRUCT(RimeContext, nextContext);
-        if (!RimeGetContext(gSessionId, &nextContext)) {
+        if (!gRimeApi->get_context(gSessionId, &nextContext)) {
             return results;
         }
         context = nextContext;
@@ -151,7 +192,7 @@ std::vector<std::string> collectCandidatesLocked(int limit, int page) {
         }
     }
 
-    RimeFreeContext(&context);
+    gRimeApi->free_context(&context);
     return results;
 }
 #endif
@@ -206,12 +247,17 @@ Java_com_arche_threply_ime_rime_RimeNativeBridge_nativeInitialize(
     }
 #endif
 
-    LOGI("nativeInitialize schema=%s shared=%s user=%s has_librime=%d initialized=%d",
+    LOGI("nativeInitialize schema=%s shared=%s user=%s HAS_LIBRIME=%d initialized=%d",
          gCurrentSchema.c_str(),
          gSharedDataDir.c_str(),
          gUserDataDir.c_str(),
          HAS_LIBRIME,
          gInitialized ? 1 : 0);
+#if !HAS_LIBRIME
+    LOGW("nativeInitialize: compiled WITHOUT librime (HAS_LIBRIME=0). "
+         "Native Rime is disabled — all queries will return empty. "
+         "To enable: place libRime.so in jniLibs/<ABI>/ and rebuild.");
+#endif
     return gInitialized ? JNI_TRUE : JNI_FALSE;
 }
 
@@ -239,8 +285,12 @@ Java_com_arche_threply_ime_rime_RimeNativeBridge_nativeOnFinishInput(
         jobject /*thiz*/) {
     std::lock_guard<std::mutex> guard(gMutex);
 #if HAS_LIBRIME
-    if (gSessionId != 0 && RimeFindSession(gSessionId)) {
-        RimeClearComposition(gSessionId);
+    if (ensureApiLoadedLocked() &&
+        gSessionId != 0 &&
+        gRimeApi->find_session != nullptr &&
+        gRimeApi->clear_composition != nullptr &&
+        gRimeApi->find_session(gSessionId)) {
+        gRimeApi->clear_composition(gSessionId);
     }
 #endif
     LOGI("nativeOnFinishInput schema=%s initialized=%d", gCurrentSchema.c_str(), gInitialized ? 1 : 0);
@@ -283,14 +333,6 @@ Java_com_arche_threply_ime_rime_RimeNativeBridge_nativeQueryCandidates(
     int safePage = std::max(static_cast<int>(page), 0);
 
     std::lock_guard<std::mutex> guard(gMutex);
-    LOGI("nativeQueryCandidates schema=%s input=%s limit=%d page=%d initialized=%d has_librime=%d",
-         schemaName.c_str(),
-         raw.c_str(),
-         safeLimit,
-         safePage,
-         gInitialized ? 1 : 0,
-         HAS_LIBRIME);
-
     if (!gInitialized || raw.empty()) {
         return toJavaStringArray(env, {});
     }
@@ -314,6 +356,7 @@ Java_com_arche_threply_ime_rime_RimeNativeBridge_nativeQueryCandidates(
     const std::vector<std::string> candidates = collectCandidatesLocked(safeLimit, safePage);
     return toJavaStringArray(env, candidates);
 #else
+    LOGW("nativeQueryCandidates: HAS_LIBRIME=0, returning empty (stub mode)");
     return toJavaStringArray(env, {});
 #endif
 }

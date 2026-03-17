@@ -150,6 +150,35 @@ internal object RimeResourceManager {
         return previousVersion < RESOURCE_VERSION || empty
     }
 
+    /** Diagnostic info for developer UI. */
+    data class DiagnosticInfo(
+        val sharedDirExists: Boolean,
+        val sharedFileCount: Int,
+        val userDirExists: Boolean,
+        val deployedVersion: Int,
+        val currentVersion: Int,
+        val hasRimeAssets: Boolean,
+        val sharedDirPath: String,
+        val userDirPath: String
+    )
+
+    fun getDiagnosticInfo(context: Context): DiagnosticInfo {
+        val appContext = context.applicationContext
+        val root = File(appContext.filesDir, "rime")
+        val sharedDir = File(root, "shared")
+        val userDir = File(root, "user")
+        return DiagnosticInfo(
+            sharedDirExists = sharedDir.isDirectory,
+            sharedFileCount = sharedDir.listFiles()?.size ?: 0,
+            userDirExists = userDir.isDirectory,
+            deployedVersion = PrefsManager.getImeRimeResourceVersion(appContext),
+            currentVersion = RESOURCE_VERSION,
+            hasRimeAssets = hasRimeAssets(appContext),
+            sharedDirPath = sharedDir.absolutePath,
+            userDirPath = userDir.absolutePath
+        )
+    }
+
     private fun hasRimeAssets(context: Context): Boolean {
         return try {
             val listed = context.assets.list(ASSET_RIME_ROOT)
