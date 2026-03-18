@@ -2,22 +2,25 @@ package com.arche.threply
 
 import android.content.Intent
 import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.appcompat.app.AppCompatDelegate
+import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.animation.*
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import com.arche.threply.data.PrefsManager
 import com.arche.threply.ui.home.HomeScreen
 import com.arche.threply.ui.onboarding.OnboardingScreen
 import com.arche.threply.ui.paywall.PaywallScreen
 import com.arche.threply.ui.theme.ThreplyTheme
+import com.arche.threply.ui.theme.threplyPalette
 
 /**
  * Single Activity entry point for Threply Android.
@@ -26,11 +29,15 @@ import com.arche.threply.ui.theme.ThreplyTheme
  * Routes between OnboardingScreen and HomeScreen based on onboarding completion state,
  * mirroring iOS ContentView's hasCompletedOnboarding logic.
  */
-class MainActivity : ComponentActivity() {
+class MainActivity : AppCompatActivity() {
 
     private val _deepLinkPaywall = mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        AppCompatDelegate.setDefaultNightMode(PrefsManager.getThemePreference(this).nightMode)
+        installSplashScreen().setOnExitAnimationListener { splashScreenViewProvider ->
+            splashScreenViewProvider.remove()
+        }
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         handleDeepLink(intent)
@@ -59,6 +66,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun ThreplyRoot(showPaywallFromDeepLink: MutableState<Boolean>) {
     val context = LocalContext.current
+    val palette = threplyPalette()
     var hasCompletedOnboarding by remember {
         mutableStateOf(PrefsManager.hasCompletedOnboarding(context))
     }
@@ -95,10 +103,9 @@ private fun ThreplyRoot(showPaywallFromDeepLink: MutableState<Boolean>) {
     if (showPaywallFromDeepLink.value) {
         ModalBottomSheet(
             onDismissRequest = { showPaywallFromDeepLink.value = false },
-            containerColor = Color.Black,
+            containerColor = palette.bottomSheetSurface,
         ) {
             PaywallScreen(onDismiss = { showPaywallFromDeepLink.value = false })
         }
     }
 }
-

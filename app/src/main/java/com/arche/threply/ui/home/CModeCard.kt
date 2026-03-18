@@ -9,6 +9,7 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -19,6 +20,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
@@ -26,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.arche.threply.data.PrefsManager
 import com.arche.threply.ui.theme.ThreplyColors
+import com.arche.threply.ui.theme.threplyPalette
 import kotlin.math.*
 
 /**
@@ -35,6 +38,7 @@ import kotlin.math.*
 @Composable
 fun CModeCard(modifier: Modifier = Modifier) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val palette = threplyPalette()
     val gridCount = 11
     var normalizedPoint by remember {
         val savedLength = PrefsManager.getImeStyleLength(context)
@@ -42,7 +46,11 @@ fun CModeCard(modifier: Modifier = Modifier) {
         mutableStateOf(Offset(savedLength, savedTemp))
     }
 
-    val accentColor = blendedColor(normalizedPoint.x, normalizedPoint.y)
+    val accentColor = blendedColor(
+        x = normalizedPoint.x,
+        y = normalizedPoint.y,
+        isDark = palette.isDark,
+    )
 
     val lengthText = descriptor(normalizedPoint.x, "long", "short", "balanced length")
     val temperatureText = descriptor(normalizedPoint.y, "warm", "cold", "balanced tone")
@@ -57,7 +65,7 @@ fun CModeCard(modifier: Modifier = Modifier) {
                 text = "I want the reply",
                 fontSize = 14.sp,
                 fontWeight = FontWeight.SemiBold,
-                color = Color.White.copy(alpha = 0.8f)
+                color = palette.textSecondary,
             )
             Row(verticalAlignment = Alignment.Bottom) {
                 Text(
@@ -70,7 +78,7 @@ fun CModeCard(modifier: Modifier = Modifier) {
                     text = " and ",
                     fontSize = 19.sp,
                     fontWeight = FontWeight.Bold,
-                    color = Color.White
+                    color = palette.textPrimary,
                 )
                 Text(
                     text = temperatureText,
@@ -104,14 +112,24 @@ fun CModeCard(modifier: Modifier = Modifier) {
                     .fillMaxSize()
                     .clip(shape)
                     .background(
-                        Brush.linearGradient(
-                            colors = listOf(
-                                Color.White.copy(alpha = 0.08f),
-                                accentColor.copy(alpha = 0.16f)
+                        if (palette.isDark) {
+                            Brush.linearGradient(
+                                colors = listOf(
+                                    palette.secondaryButtonContainer,
+                                    accentColor.copy(alpha = 0.16f),
+                                )
                             )
-                        )
+                        } else {
+                            Brush.linearGradient(
+                                colors = listOf(
+                                    Color.White.copy(alpha = 0.82f),
+                                    palette.gradientCyan.copy(alpha = 0.24f),
+                                    palette.gradientOrange.copy(alpha = 0.20f),
+                                )
+                            )
+                        }
                     )
-                    .border(1.dp, Color.White.copy(alpha = 0.2f), shape)
+                    .border(1.dp, palette.glassBorderMedium, shape)
                     .pointerInput(Unit) {
                         detectDragGestures(
                             onDragStart = { offset ->
@@ -174,7 +192,11 @@ fun CModeCard(modifier: Modifier = Modifier) {
                                 )
                             )
                         )
-                        .border(1.4.dp, Color.White.copy(alpha = 0.9f), CircleShape)
+                        .border(
+                            1.4.dp,
+                            if (palette.isDark) Color.White.copy(alpha = 0.9f) else palette.glassBorderStrong,
+                            CircleShape
+                        )
                 )
             }
         }
@@ -251,33 +273,40 @@ private fun DrawScope.drawDotField(
     }
 }
 
-private fun blendedColor(x: Float, y: Float): Color {
-    val warmWeight = (y + 1f) / 2f
-    val coldWeight = 1f - warmWeight
-    val longWeight = (x + 1f) / 2f
+private fun blendedColor(x: Float, y: Float, isDark: Boolean): Color {
+    val warmWeight = ((y + 1f) / 2f).coerceIn(0f, 1f)
+    val coolWeight = 1f - warmWeight
+    val longWeight = ((x + 1f) / 2f).coerceIn(0f, 1f)
     val shortWeight = 1f - longWeight
+    val soften = if (isDark) 0f else 0.12f
 
-    val orange = floatArrayOf(250f / 255f, 160f / 255f, 72f / 255f)
-    val green = floatArrayOf(94f / 255f, 198f / 255f, 121f / 255f)
-    val blue = floatArrayOf(84f / 255f, 153f / 255f, 222f / 255f)
-    val purple = floatArrayOf(166f / 255f, 124f / 255f, 233f / 255f)
+    val warmLong = lerp(Color(0xFFFAA048), Color.White, soften)
+    val warmShort = lerp(Color(0xFF5EC679), Color.White, soften)
+    val coolShort = lerp(Color(0xFF5499DE), Color.White, soften)
+    val coolLong = lerp(Color(0xFFA67CE9), Color.White, soften)
 
-    val weights = listOf(
-        orange to (warmWeight * longWeight),
-        green to (warmWeight * shortWeight),
-        blue to (coldWeight * shortWeight),
-        purple to (coldWeight * longWeight)
+    val weightedColors = listOf(
+        warmLong to (warmWeight * longWeight),
+        warmShort to (warmWeight * shortWeight),
+        coolShort to (coolWeight * shortWeight),
+        coolLong to (coolWeight * longWeight),
     )
+    val totalWeight = weightedColors.sumOf { it.second.toDouble() }.toFloat()
+    if (totalWeight <= 0f) return Color.White
 
-    val total = weights.sumOf { it.second.toDouble() }.toFloat()
-    if (total <= 0f) return Color.White
-
-    var r = 0f; var g = 0f; var b = 0f
-    for ((color, weight) in weights) {
-        r += color[0] * weight
-        g += color[1] * weight
-        b += color[2] * weight
+    var red = 0f
+    var green = 0f
+    var blue = 0f
+    weightedColors.forEach { (color, weight) ->
+        red += color.red * weight
+        green += color.green * weight
+        blue += color.blue * weight
     }
 
-    return Color(r / total, g / total, b / total)
+    return Color(
+        red = red / totalWeight,
+        green = green / totalWeight,
+        blue = blue / totalWeight,
+        alpha = 1f,
+    )
 }

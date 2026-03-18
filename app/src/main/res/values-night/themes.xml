@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="Theme.Threply.Splash" parent="Theme.SplashScreen">
-        <item name="windowSplashScreenBackground">#F5F7FA</item>
+        <item name="windowSplashScreenBackground">@android:color/black</item>
         <item name="windowSplashScreenAnimatedIcon">@mipmap/ic_launcher</item>
         <item name="postSplashScreenTheme">@style/Theme.Threply</item>
         <item name="windowSplashScreenAnimationDuration">0</item>
@@ -9,7 +9,7 @@
     </style>
 
     <style name="Theme.Threply" parent="Theme.AppCompat.DayNight.NoActionBar">
-        <item name="android:windowBackground">#F5F7FA</item>
+        <item name="android:windowBackground">@android:color/black</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
     </style>

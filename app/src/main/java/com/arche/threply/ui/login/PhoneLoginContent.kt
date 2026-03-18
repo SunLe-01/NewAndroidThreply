@@ -18,6 +18,10 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalContext
 import com.arche.threply.data.BackendAuthApi
 import com.arche.threply.data.BackendSessionStore
+import com.arche.threply.ui.theme.threplyPalette
+import com.arche.threply.ui.theme.threplyPrimaryButtonColors
+import com.arche.threply.ui.theme.threplySecondaryButtonColors
+import com.arche.threply.ui.theme.threplyTextFieldColors
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -27,6 +31,7 @@ fun PhoneLoginContent(
     onLoginSuccess: (phoneNumber: String, response: BackendAuthApi.LoginResponse) -> Unit
 ) {
     val context = LocalContext.current
+    val palette = threplyPalette()
     val scope = rememberCoroutineScope()
 
     var phoneNumber by remember { mutableStateOf("") }
@@ -66,7 +71,7 @@ fun PhoneLoginContent(
                 Icon(
                     Icons.Filled.ArrowBack,
                     contentDescription = "返回",
-                    tint = Color.White
+                    tint = palette.textPrimary,
                 )
             }
         }
@@ -77,7 +82,7 @@ fun PhoneLoginContent(
             text = "手机号登录",
             fontSize = 20.sp,
             fontWeight = FontWeight.SemiBold,
-            color = Color.White
+            color = palette.textPrimary,
         )
 
         Spacer(Modifier.height(6.dp))
@@ -85,7 +90,7 @@ fun PhoneLoginContent(
         Text(
             text = "输入手机号，我们将发送 6 位验证码。",
             fontSize = 13.sp,
-            color = Color.White.copy(alpha = 0.65f),
+            color = palette.textSecondary,
             textAlign = TextAlign.Center
         )
 
@@ -101,14 +106,7 @@ fun PhoneLoginContent(
             placeholder = { Text("请输入手机号") },
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedTextColor = Color.White,
-                unfocusedTextColor = Color.White.copy(alpha = 0.9f),
-                focusedBorderColor = Color.White.copy(alpha = 0.7f),
-                unfocusedBorderColor = Color.White.copy(alpha = 0.3f),
-                focusedLabelColor = Color.White.copy(alpha = 0.8f),
-                unfocusedLabelColor = Color.White.copy(alpha = 0.6f)
-            ),
+            colors = threplyTextFieldColors(),
             modifier = Modifier.fillMaxWidth(),
             enabled = !isSendingCode && !isVerifying
         )
@@ -130,14 +128,7 @@ fun PhoneLoginContent(
                 placeholder = { Text("6位验证码") },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedTextColor = Color.White,
-                    unfocusedTextColor = Color.White.copy(alpha = 0.9f),
-                    focusedBorderColor = Color.White.copy(alpha = 0.7f),
-                    unfocusedBorderColor = Color.White.copy(alpha = 0.3f),
-                    focusedLabelColor = Color.White.copy(alpha = 0.8f),
-                    unfocusedLabelColor = Color.White.copy(alpha = 0.6f)
-                ),
+                colors = threplyTextFieldColors(),
                 modifier = Modifier.weight(1f),
                 enabled = !isSendingCode && !isVerifying
             )
@@ -162,10 +153,7 @@ fun PhoneLoginContent(
                 },
                 enabled = canSendCode,
                 shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color.White.copy(alpha = 0.14f),
-                    contentColor = Color.White
-                )
+                colors = threplySecondaryButtonColors()
             ) {
                 Text(
                     if (countdown > 0) "${countdown}s" else if (isSendingCode) "发送中" else "发送",
@@ -197,10 +185,7 @@ fun PhoneLoginContent(
             },
             enabled = canVerify,
             shape = RoundedCornerShape(14.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = Color.White,
-                contentColor = Color.Black
-            ),
+            colors = threplyPrimaryButtonColors(),
             modifier = Modifier
                 .fillMaxWidth()
                 .height(50.dp)
@@ -209,7 +194,7 @@ fun PhoneLoginContent(
                 CircularProgressIndicator(
                     modifier = Modifier.size(16.dp),
                     strokeWidth = 2.dp,
-                    color = Color.Black
+                    color = palette.primaryButtonContent
                 )
             } else {
                 Text("验证并登录", fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
@@ -231,7 +216,7 @@ fun PhoneLoginContent(
         Text(
             text = "验证码将通过短信发送到您的手机。",
             fontSize = 12.sp,
-            color = Color.White.copy(alpha = 0.5f),
+            color = palette.textTertiary,
             textAlign = TextAlign.Center
         )
     }

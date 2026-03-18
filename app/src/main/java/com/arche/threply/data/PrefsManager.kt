@@ -78,6 +78,14 @@ object PrefsManager {
     fun setHandedness(context: Context, value: String) =
         prefs(context).edit().putString("threply.handedness", value).apply()
 
+    fun getThemePreference(context: Context): ThemePreference =
+        ThemePreference.fromStorage(
+            prefs(context).getString("threply.themePreference", ThemePreference.System.storageValue)
+        )
+
+    fun setThemePreference(context: Context, value: ThemePreference) =
+        prefs(context).edit().putString("threply.themePreference", value.storageValue).apply()
+
     // ─── Backend ───
     fun getBackendBaseURL(context: Context): String =
         prefs(context).getString("com.arche.threply.backendBaseURL", BackendSessionStore.DEFAULT_BASE_URL)

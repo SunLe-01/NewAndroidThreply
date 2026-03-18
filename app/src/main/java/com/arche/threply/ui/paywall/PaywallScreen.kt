@@ -34,6 +34,10 @@ import androidx.compose.ui.unit.sp
 import com.arche.threply.billing.BillingManager
 import com.arche.threply.billing.PricingOption
 import com.arche.threply.ui.theme.ThreplyColors
+import com.arche.threply.ui.theme.threplyOutlinedBorder
+import com.arche.threply.ui.theme.threplyOutlinedButtonColors
+import com.arche.threply.ui.theme.threplyPalette
+import com.arche.threply.ui.theme.threplyPrimaryButtonColors
 
 /**
  * Paywall screen with pricing options.
@@ -48,6 +52,7 @@ private enum class PaywallStage {
 @Composable
 fun PaywallScreen(onDismiss: () -> Unit) {
     val context = LocalContext.current
+    val palette = threplyPalette()
     val billingManager = remember { BillingManager.getInstance(context) }
     var selectedOptionId by remember { mutableStateOf(PricingOption.defaultOptions[1].id) }
     val pagerState = rememberPagerState(pageCount = { 3 })
@@ -67,7 +72,10 @@ fun PaywallScreen(onDismiss: () -> Unit) {
             .fillMaxWidth()
             .background(
                 Brush.linearGradient(
-                    colors = listOf(Color.Black, Color(0xFF0D0D1E))
+                    colors = listOf(
+                        palette.backdropStart,
+                        palette.backdropMiddle,
+                    )
                 )
             )
     ) {
@@ -91,14 +99,14 @@ fun PaywallScreen(onDismiss: () -> Unit) {
                     TextButton(onClick = {
                         billingManager.restorePurchases()
                     }) {
-                        Text("Restore", color = Color.White, fontSize = 14.sp)
+                        Text("Restore", color = palette.textPrimary, fontSize = 14.sp)
                     }
                 } else {
                     IconButton(onClick = { currentStage = PaywallStage.Plans }) {
                         Icon(
                             Icons.Filled.ArrowBack,
                             contentDescription = "返回",
-                            tint = Color.White.copy(alpha = 0.8f)
+                            tint = palette.textSecondary,
                         )
                     }
                 }
@@ -106,14 +114,14 @@ fun PaywallScreen(onDismiss: () -> Unit) {
                 Text(
                     text = if (currentStage == PaywallStage.Plans) "Threply Pro" else "确认支付",
                     fontSize = 14.sp,
-                    color = Color.White.copy(alpha = 0.8f)
+                    color = palette.textSecondary,
                 )
 
                 IconButton(onClick = onDismiss) {
                     Icon(
                         Icons.Filled.Cancel,
                         contentDescription = "关闭",
-                        tint = Color.White.copy(alpha = 0.8f)
+                        tint = palette.textSecondary,
                     )
                 }
             }
@@ -192,6 +200,7 @@ private fun PlanSelectionContent(
     onContinue: () -> Unit,
     displayPrice: (PricingOption) -> String
 ) {
+    val palette = threplyPalette()
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -211,8 +220,8 @@ private fun PlanSelectionContent(
                 modifier = Modifier
                     .fillMaxSize()
                     .clip(shape)
-                    .background(Color.White.copy(alpha = 0.08f))
-                    .border(1.dp, Color.White.copy(alpha = 0.18f), shape)
+                    .background(palette.glassSurfaceElevated)
+                    .border(1.dp, palette.glassBorderMedium, shape)
                     .padding(24.dp)
             ) {
                 Column(
@@ -224,12 +233,12 @@ private fun PlanSelectionContent(
                             text = "不限飞行次数",
                             fontSize = 17.sp,
                             fontWeight = FontWeight.SemiBold,
-                            color = Color.White
+                            color = palette.textPrimary,
                         )
                         Text(
                             text = "支持云端 OCR 与三条智能建议，专注力与效率齐飞。",
                             fontSize = 14.sp,
-                            color = Color.White.copy(alpha = 0.75f)
+                            color = palette.textSecondary,
                         )
                     }
 
@@ -240,13 +249,13 @@ private fun PlanSelectionContent(
                         Icon(
                             Icons.Filled.FlightTakeoff,
                             null,
-                            tint = Color.White.copy(alpha = 0.6f),
+                            tint = palette.textSecondary,
                             modifier = Modifier.size(16.dp)
                         )
                         Text(
                             text = "预留素材 ${page + 1}",
                             fontSize = 12.sp,
-                            color = Color.White.copy(alpha = 0.6f)
+                            color = palette.textSecondary,
                         )
                     }
                 }
@@ -263,8 +272,8 @@ private fun PlanSelectionContent(
                         .size(8.dp)
                         .clip(CircleShape)
                         .background(
-                            if (index == pagerState.currentPage) Color.White
-                            else Color.White.copy(alpha = 0.25f)
+                            if (index == pagerState.currentPage) palette.textPrimary
+                            else palette.glassBorderMedium
                         )
                 )
             }
@@ -274,13 +283,13 @@ private fun PlanSelectionContent(
             text = "Unlimited Flights",
             fontSize = 22.sp,
             fontWeight = FontWeight.Bold,
-            color = Color.White
+            color = palette.textPrimary,
         )
 
         Text(
             text = "Threply 会员解锁全量次数、三条候选、深度历史上下文与快捷指令一键链路。",
             fontSize = 14.sp,
-            color = Color.White.copy(alpha = 0.75f),
+            color = palette.textSecondary,
             textAlign = TextAlign.Center,
             modifier = Modifier.padding(horizontal = 24.dp)
         )
@@ -293,9 +302,9 @@ private fun PlanSelectionContent(
                 CircularProgressIndicator(
                     modifier = Modifier.size(16.dp),
                     strokeWidth = 2.dp,
-                    color = Color.White.copy(alpha = 0.8f)
+                    color = palette.textPrimary,
                 )
-                Text("正在加载价格...", fontSize = 12.sp, color = Color.White.copy(alpha = 0.6f))
+                Text("正在加载价格...", fontSize = 12.sp, color = palette.textSecondary)
             }
         }
 
@@ -329,10 +338,10 @@ private fun PlanSelectionContent(
                 .fillMaxWidth()
                 .padding(horizontal = 18.dp)
                 .scale(ctaScale)
-                .shadow(14.dp, ctaShape, ambientColor = Color.Black.copy(alpha = 0.3f))
+                .shadow(14.dp, ctaShape, ambientColor = palette.shadowColor)
                 .clip(ctaShape)
-                .background(ThreplyColors.glassSurfaceElevated)
-                .border(1.dp, Color.White.copy(alpha = 0.28f), ctaShape)
+                .background(palette.glassSurfaceElevated)
+                .border(1.dp, palette.glassBorderMedium, ctaShape)
                 .clickable(
                     enabled = !isProcessingPurchase && !isLoadingProducts && !isSelectedEntitled,
                     onClick = onContinue
@@ -344,7 +353,7 @@ private fun PlanSelectionContent(
                 text = if (isSelectedEntitled) "已解锁" else "继续",
                 fontSize = 16.sp,
                 fontWeight = FontWeight.SemiBold,
-                color = Color.White
+                color = palette.textPrimary,
             )
         }
 
@@ -354,8 +363,8 @@ private fun PlanSelectionContent(
                 .padding(horizontal = 22.dp),
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Text("Privacy | Terms", fontSize = 12.sp, color = Color.White.copy(alpha = 0.55f))
-            Text("可随时取消订阅", fontSize = 12.sp, color = Color.White.copy(alpha = 0.55f))
+            Text("Privacy | Terms", fontSize = 12.sp, color = palette.textTertiary)
+            Text("可随时取消订阅", fontSize = 12.sp, color = palette.textTertiary)
         }
     }
 }
@@ -367,6 +376,7 @@ private fun CheckoutStageContent(
     onSubmit: () -> Unit,
     onBack: () -> Unit
 ) {
+    val palette = threplyPalette()
     val cardShape = RoundedCornerShape(24.dp)
 
     Column(
@@ -378,13 +388,13 @@ private fun CheckoutStageContent(
         Text(
             text = "确认你选择的方案与支付方式。当前先接通页面框架，后续再替换成真实 Google Play 购买。",
             fontSize = 14.sp,
-            color = Color.White.copy(alpha = 0.72f),
+            color = palette.textSecondary,
             textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth()
         )
 
         Surface(
-            color = Color.White.copy(alpha = 0.08f),
+            color = palette.glassSurfaceElevated,
             shape = cardShape,
             modifier = Modifier.fillMaxWidth()
         ) {
@@ -392,19 +402,19 @@ private fun CheckoutStageContent(
                 modifier = Modifier.padding(20.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text("订单信息", color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp)
-                Text(selectedOption.name, color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                Text(selectedPrice, color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.ExtraBold)
+                Text("订单信息", color = palette.textSecondary, fontSize = 13.sp)
+                Text(selectedOption.name, color = palette.textPrimary, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                Text(selectedPrice, color = palette.textPrimary, fontSize = 28.sp, fontWeight = FontWeight.ExtraBold)
                 Text(
                     text = selectedOption.subtitle,
-                    color = Color.White.copy(alpha = 0.68f),
+                    color = palette.textSecondary,
                     fontSize = 13.sp
                 )
             }
         }
 
         Surface(
-            color = ThreplyColors.glassSurface,
+            color = palette.glassSurface,
             shape = cardShape,
             modifier = Modifier.fillMaxWidth()
         ) {
@@ -420,39 +430,39 @@ private fun CheckoutStageContent(
                         modifier = Modifier
                             .size(42.dp)
                             .clip(RoundedCornerShape(14.dp))
-                            .background(Color.White.copy(alpha = 0.12f)),
+                            .background(palette.secondaryButtonContainer),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             Icons.Filled.AccountBalanceWallet,
                             contentDescription = null,
-                            tint = Color.White,
+                            tint = palette.textPrimary,
                             modifier = Modifier.size(22.dp)
                         )
                     }
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text("Google Play 支付", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-                        Text("演示模式，不发起真实扣款", color = Color.White.copy(alpha = 0.6f), fontSize = 12.sp)
+                        Text("Google Play 支付", color = palette.textPrimary, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                        Text("演示模式，不发起真实扣款", color = palette.textSecondary, fontSize = 12.sp)
                     }
                 }
 
-                HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
+                HorizontalDivider(color = palette.glassBorderSoft)
 
-                Text("你将看到的真实流程", color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp)
-                Text("1. 拉起 Google Play 购买弹层", color = Color.White, fontSize = 14.sp)
-                Text("2. 确认订阅周期与付款方式", color = Color.White, fontSize = 14.sp)
-                Text("3. 支付结果回传主 App 与键盘侧状态", color = Color.White, fontSize = 14.sp)
+                Text("你将看到的真实流程", color = palette.textSecondary, fontSize = 13.sp)
+                Text("1. 拉起 Google Play 购买弹层", color = palette.textPrimary, fontSize = 14.sp)
+                Text("2. 确认订阅周期与付款方式", color = palette.textPrimary, fontSize = 14.sp)
+                Text("3. 支付结果回传主 App 与键盘侧状态", color = palette.textPrimary, fontSize = 14.sp)
             }
         }
 
         Surface(
-            color = Color(0x1AF5C451),
+            color = palette.positiveSurface,
             shape = RoundedCornerShape(18.dp),
             modifier = Modifier.fillMaxWidth()
         ) {
             Text(
                 text = "当前版本只补支付页面框架，不会真实购买，也不会把你标记为 Pro。",
-                color = Color.White.copy(alpha = 0.82f),
+                color = palette.positiveContent,
                 fontSize = 13.sp,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)
             )
@@ -460,10 +470,7 @@ private fun CheckoutStageContent(
 
         Button(
             onClick = onSubmit,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = Color.White,
-                contentColor = Color.Black
-            ),
+            colors = threplyPrimaryButtonColors(),
             shape = RoundedCornerShape(16.dp),
             modifier = Modifier
                 .fillMaxWidth()
@@ -474,8 +481,8 @@ private fun CheckoutStageContent(
 
         OutlinedButton(
             onClick = onBack,
-            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
-            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.28f)),
+            colors = threplyOutlinedButtonColors(),
+            border = threplyOutlinedBorder(),
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(16.dp)
         ) {
@@ -494,6 +501,7 @@ private fun PricingOptionCard(
     isEntitled: Boolean,
     onClick: () -> Unit
 ) {
+    val palette = threplyPalette()
     val scale by animateFloatAsState(
         targetValue = if (isSelected) 1.04f else 1f,
         animationSpec = spring(dampingRatio = 0.85f, stiffness = 300f),
@@ -506,12 +514,12 @@ private fun PricingOptionCard(
         modifier = Modifier
             .width(160.dp)
             .scale(scale)
-            .shadow(14.dp, shape, ambientColor = Color.Black.copy(alpha = 0.25f))
+            .shadow(14.dp, shape, ambientColor = palette.shadowColor)
             .clip(shape)
-            .background(ThreplyColors.glassSurface)
+            .background(palette.glassSurface)
             .border(
                 width = if (isSelected) 2.dp else 1.dp,
-                color = if (isSelected) ThreplyColors.accent else Color.White.copy(alpha = 0.24f),
+                color = if (isSelected) ThreplyColors.accent else palette.glassBorderMedium,
                 shape = shape
             )
             .clickable(onClick = onClick)
@@ -530,7 +538,7 @@ private fun PricingOptionCard(
                     text = "已解锁",
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
-                    color = Color.Black,
+                    color = palette.primaryButtonContainer,
                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                 )
             }
@@ -544,7 +552,7 @@ private fun PricingOptionCard(
                     text = option.badgeText,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
-                    color = Color.Black,
+                    color = palette.primaryButtonContainer,
                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                 )
             }
@@ -554,20 +562,20 @@ private fun PricingOptionCard(
             text = option.name,
             fontSize = 17.sp,
             fontWeight = FontWeight.SemiBold,
-            color = Color.White
+            color = palette.textPrimary,
         )
 
         Text(
             text = priceText,
             fontSize = 19.sp,
             fontWeight = FontWeight.Bold,
-            color = Color.White
+            color = palette.textPrimary,
         )
 
         Text(
             text = option.subtitle,
             fontSize = 12.sp,
-            color = Color.White.copy(alpha = 0.7f)
+            color = palette.textSecondary,
         )
     }
 }

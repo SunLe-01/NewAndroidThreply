@@ -28,6 +28,10 @@ import com.arche.threply.BuildConfig
 import com.arche.threply.data.BackendAuthApi
 import com.arche.threply.data.BackendSessionStore
 import com.arche.threply.data.PrefsManager
+import com.arche.threply.ui.theme.ThreplyColors
+import com.arche.threply.ui.theme.threplyPalette
+import com.arche.threply.ui.theme.threplyPrimaryButtonColors
+import com.arche.threply.ui.theme.threplySecondaryButtonColors
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import kotlinx.coroutines.launch
@@ -41,6 +45,7 @@ fun LoginScreen(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
+    val palette = threplyPalette()
     val scope = rememberCoroutineScope()
     var isSigningIn by remember { mutableStateOf(false) }
     var signInError by remember { mutableStateOf<String?>(null) }
@@ -81,7 +86,7 @@ fun LoginScreen(
         Icon(
             Icons.Filled.AccountCircle,
             contentDescription = null,
-            tint = Color.Gray,
+            tint = palette.textTertiary,
             modifier = Modifier.size(68.dp)
         )
 
@@ -91,7 +96,7 @@ fun LoginScreen(
             text = "登陆你的 Threply 账号",
             fontSize = 20.sp,
             fontWeight = FontWeight.SemiBold,
-            color = Color.White
+            color = palette.textPrimary,
         )
 
         Spacer(Modifier.height(6.dp))
@@ -99,7 +104,7 @@ fun LoginScreen(
         Text(
             text = "选择 Google 账户或手机号登陆，稍后即可管理偏好设置。",
             fontSize = 14.sp,
-            color = Color.White.copy(alpha = 0.6f),
+            color = palette.textSecondary,
             textAlign = TextAlign.Center
         )
 
@@ -132,10 +137,7 @@ fun LoginScreen(
                     }
                 }
             },
-            colors = ButtonDefaults.buttonColors(
-                containerColor = Color.White,
-                contentColor = Color.Black
-            ),
+            colors = threplyPrimaryButtonColors(),
             shape = RoundedCornerShape(14.dp),
             modifier = Modifier
                 .fillMaxWidth()
@@ -168,10 +170,7 @@ fun LoginScreen(
                 signInError = null
                 showPhoneLogin = true
             },
-            colors = ButtonDefaults.buttonColors(
-                containerColor = Color.White.copy(alpha = 0.08f),
-                contentColor = Color.White
-            ),
+            colors = threplySecondaryButtonColors(),
             shape = RoundedCornerShape(14.dp),
             modifier = Modifier
                 .fillMaxWidth()
@@ -203,12 +202,12 @@ fun LoginScreen(
                 CircularProgressIndicator(
                     modifier = Modifier.size(16.dp),
                     strokeWidth = 2.dp,
-                    color = Color.White.copy(alpha = 0.6f)
+                    color = palette.textSecondary,
                 )
                 Text(
                     text = "正在验证 Google 账号...",
                     fontSize = 12.sp,
-                    color = Color.White.copy(alpha = 0.6f)
+                    color = palette.textSecondary,
                 )
             }
         }
@@ -243,7 +242,7 @@ fun LoginScreen(
                 },
                 colors = ButtonDefaults.buttonColors(
                     containerColor = Color(0xFF4CAF50).copy(alpha = 0.15f),
-                    contentColor = Color(0xFF81C784)
+                    contentColor = ThreplyColors.green
                 ),
                 shape = RoundedCornerShape(14.dp),
                 modifier = Modifier
@@ -260,7 +259,7 @@ fun LoginScreen(
         Text(
             text = "登录后即可使用 AI 输入建议与会员功能。",
             fontSize = 12.sp,
-            color = Color.White.copy(alpha = 0.5f),
+            color = palette.textTertiary,
             textAlign = TextAlign.Center
         )
     }

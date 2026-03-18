@@ -20,7 +20,12 @@ import com.arche.threply.data.PrefsManager
 import com.arche.threply.data.profile.ReplyHistoryStore
 import com.arche.threply.data.profile.UserProfile
 import com.arche.threply.data.profile.UserProfileStore
-import com.arche.threply.ui.theme.ThreplyColors
+import com.arche.threply.ui.theme.threplyCardColors
+import com.arche.threply.ui.theme.threplyDestructiveButtonColors
+import com.arche.threply.ui.theme.threplyPalette
+import com.arche.threply.ui.theme.threplyPrimaryButtonColors
+import com.arche.threply.ui.theme.threplySwitchColors
+import com.arche.threply.ui.theme.threplyTextFieldColors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -31,6 +36,7 @@ import java.util.Locale
 @Composable
 fun ProfilePersonaScreen(onBack: () -> Unit = {}) {
     val context = LocalContext.current
+    val palette = threplyPalette()
     val scope = rememberCoroutineScope()
     var profileEnabled by remember { mutableStateOf(PrefsManager.isProfileEnabled(context)) }
     var profile by remember { mutableStateOf(UserProfileStore.get(context)) }
@@ -52,15 +58,15 @@ fun ProfilePersonaScreen(onBack: () -> Unit = {}) {
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("AI 个性化", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Color.White)
+            Text("AI 个性化", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = palette.textPrimary)
             TextButton(onClick = onBack) {
-                Text("返回", color = Color.White.copy(alpha = 0.7f))
+                Text("返回", color = palette.textSecondary)
             }
         }
 
         // Toggle
         Card(
-            colors = CardDefaults.cardColors(containerColor = ThreplyColors.glassSurface),
+            colors = threplyCardColors(),
             modifier = Modifier.fillMaxWidth()
         ) {
             Row(
@@ -69,8 +75,8 @@ fun ProfilePersonaScreen(onBack: () -> Unit = {}) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("启用画像个性化", fontSize = 15.sp, color = Color.White)
-                    Text("AI 回复会参考你的表达习惯", fontSize = 12.sp, color = Color.White.copy(alpha = 0.5f))
+                    Text("启用画像个性化", fontSize = 15.sp, color = palette.textPrimary)
+                    Text("AI 回复会参考你的表达习惯", fontSize = 12.sp, color = palette.textTertiary)
                 }
                 Switch(
                     checked = profileEnabled,
@@ -78,12 +84,7 @@ fun ProfilePersonaScreen(onBack: () -> Unit = {}) {
                         profileEnabled = it
                         PrefsManager.setProfileEnabled(context, it)
                     },
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = Color.White,
-                        checkedTrackColor = Color.White.copy(alpha = 0.3f),
-                        uncheckedThumbColor = Color.White.copy(alpha = 0.6f),
-                        uncheckedTrackColor = Color.White.copy(alpha = 0.1f)
-                    )
+                    colors = threplySwitchColors()
                 )
             }
         }
@@ -91,48 +92,48 @@ fun ProfilePersonaScreen(onBack: () -> Unit = {}) {
         Spacer(Modifier.height(16.dp))
 
         // Profile view
-        Text("当前画像", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color.White.copy(alpha = 0.6f), modifier = Modifier.padding(bottom = 8.dp))
+        Text("当前画像", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = palette.textTertiary, modifier = Modifier.padding(bottom = 8.dp))
 
         Card(
-            colors = CardDefaults.cardColors(containerColor = ThreplyColors.glassSurface),
+            colors = threplyCardColors(),
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
                 if (profile.isEmpty) {
-                    Text("尚未生成画像，请先使用 AI 回复功能积累数据后点击下方「重新生成」。", fontSize = 14.sp, color = Color.White.copy(alpha = 0.5f))
+                    Text("尚未生成画像，请先使用 AI 回复功能积累数据后点击下方「重新生成」。", fontSize = 14.sp, color = palette.textTertiary)
                 } else {
                     if (profile.personalityTags.isNotEmpty()) {
-                        Text("性格风格", fontSize = 12.sp, color = Color.White.copy(alpha = 0.5f))
+                        Text("性格风格", fontSize = 12.sp, color = palette.textTertiary)
                         Spacer(Modifier.height(4.dp))
                         FlowChips(items = profile.personalityTags)
                         Spacer(Modifier.height(12.dp))
                     }
                     if (profile.interests.isNotEmpty()) {
-                        Text("兴趣偏好", fontSize = 12.sp, color = Color.White.copy(alpha = 0.5f))
+                        Text("兴趣偏好", fontSize = 12.sp, color = palette.textTertiary)
                         Spacer(Modifier.height(4.dp))
                         FlowChips(items = profile.interests)
                         Spacer(Modifier.height(12.dp))
                     }
                     if (profile.catchphrases.isNotEmpty()) {
-                        Text("常用表达", fontSize = 12.sp, color = Color.White.copy(alpha = 0.5f))
+                        Text("常用表达", fontSize = 12.sp, color = palette.textTertiary)
                         Spacer(Modifier.height(4.dp))
                         FlowChips(items = profile.catchphrases)
                         Spacer(Modifier.height(12.dp))
                     }
                     if (profile.toneDescription.isNotBlank()) {
-                        Text("语气风格", fontSize = 12.sp, color = Color.White.copy(alpha = 0.5f))
+                        Text("语气风格", fontSize = 12.sp, color = palette.textTertiary)
                         Spacer(Modifier.height(4.dp))
-                        Text(profile.toneDescription, fontSize = 14.sp, color = Color.White)
+                        Text(profile.toneDescription, fontSize = 14.sp, color = palette.textPrimary)
                         Spacer(Modifier.height(12.dp))
                     }
                     if (profile.avoidRules.isNotEmpty()) {
-                        Text("避免项", fontSize = 12.sp, color = Color.White.copy(alpha = 0.5f))
+                        Text("避免项", fontSize = 12.sp, color = palette.textTertiary)
                         Spacer(Modifier.height(4.dp))
                         FlowChips(items = profile.avoidRules, chipColor = Color.Red.copy(alpha = 0.15f))
                         Spacer(Modifier.height(12.dp))
                     }
                     if (profile.favoriteThings.isNotEmpty()) {
-                        Text("喜欢的事物", fontSize = 12.sp, color = Color.White.copy(alpha = 0.5f))
+                        Text("喜欢的事物", fontSize = 12.sp, color = palette.textTertiary)
                         Spacer(Modifier.height(4.dp))
                         FlowChips(items = profile.favoriteThings)
                         Spacer(Modifier.height(12.dp))
@@ -140,7 +141,7 @@ fun ProfilePersonaScreen(onBack: () -> Unit = {}) {
                     if (profile.lastInferredAt > 0) {
                         Spacer(Modifier.height(8.dp))
                         val dateStr = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(profile.lastInferredAt))
-                        Text("上次更新：$dateStr", fontSize = 11.sp, color = Color.White.copy(alpha = 0.4f))
+                        Text("上次更新：$dateStr", fontSize = 11.sp, color = palette.textDim)
                     }
                 }
             }
@@ -149,14 +150,14 @@ fun ProfilePersonaScreen(onBack: () -> Unit = {}) {
         Spacer(Modifier.height(16.dp))
 
         // Manual seeds
-        Text("手动设置", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color.White.copy(alpha = 0.6f), modifier = Modifier.padding(bottom = 8.dp))
+        Text("手动设置", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = palette.textTertiary, modifier = Modifier.padding(bottom = 8.dp))
 
         Card(
-            colors = CardDefaults.cardColors(containerColor = ThreplyColors.glassSurface),
+            colors = threplyCardColors(),
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Text("添加你的兴趣、口头禅或性格描述", fontSize = 12.sp, color = Color.White.copy(alpha = 0.5f))
+                Text("添加你的兴趣、口头禅或性格描述", fontSize = 12.sp, color = palette.textTertiary)
                 Spacer(Modifier.height(8.dp))
                 if (profile.manualSeeds.isNotEmpty()) {
                     FlowChipsRemovable(
@@ -175,15 +176,7 @@ fun ProfilePersonaScreen(onBack: () -> Unit = {}) {
                         onValueChange = { newSeed = it },
                         placeholder = { Text("例如：简洁、#编程、哈哈", fontSize = 13.sp) },
                         singleLine = true,
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = Color.White,
-                            unfocusedTextColor = Color.White.copy(alpha = 0.8f),
-                            focusedBorderColor = Color.White.copy(alpha = 0.5f),
-                            unfocusedBorderColor = Color.White.copy(alpha = 0.2f),
-                            cursorColor = Color.White,
-                            focusedPlaceholderColor = Color.White.copy(alpha = 0.3f),
-                            unfocusedPlaceholderColor = Color.White.copy(alpha = 0.3f)
-                        ),
+                        colors = threplyTextFieldColors(),
                         modifier = Modifier.weight(1f)
                     )
                     Spacer(Modifier.width(8.dp))
@@ -195,7 +188,7 @@ fun ProfilePersonaScreen(onBack: () -> Unit = {}) {
                             newSeed = ""
                         }
                     }) {
-                        Icon(Icons.Filled.Add, "添加", tint = Color.White)
+                        Icon(Icons.Filled.Add, "添加", tint = palette.textPrimary)
                     }
                 }
             }
@@ -204,14 +197,14 @@ fun ProfilePersonaScreen(onBack: () -> Unit = {}) {
         Spacer(Modifier.height(16.dp))
 
         // Actions & stats
-        Text("操作", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color.White.copy(alpha = 0.6f), modifier = Modifier.padding(bottom = 8.dp))
+        Text("操作", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = palette.textTertiary, modifier = Modifier.padding(bottom = 8.dp))
 
         Card(
-            colors = CardDefaults.cardColors(containerColor = ThreplyColors.glassSurface),
+            colors = threplyCardColors(),
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Text("已收集回复：${historyCount} 条", fontSize = 14.sp, color = Color.White)
+                Text("已收集回复：${historyCount} 条", fontSize = 14.sp, color = palette.textPrimary)
                 Spacer(Modifier.height(12.dp))
 
                 Button(
@@ -231,15 +224,16 @@ fun ProfilePersonaScreen(onBack: () -> Unit = {}) {
                             }
                         }
                     },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Color.White.copy(alpha = 0.1f),
-                        contentColor = Color.White
-                    ),
+                    colors = threplyPrimaryButtonColors(),
                     modifier = Modifier.fillMaxWidth(),
                     enabled = !isInferring
                 ) {
                     if (isInferring) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = palette.primaryButtonContent
+                        )
                         Spacer(Modifier.width(8.dp))
                     }
                     Text(if (isInferring) "正在分析..." else "重新生成画像", fontSize = 14.sp)
@@ -247,7 +241,7 @@ fun ProfilePersonaScreen(onBack: () -> Unit = {}) {
 
                 if (inferResult != null) {
                     Spacer(Modifier.height(8.dp))
-                    Text(inferResult!!, fontSize = 12.sp, color = Color.White.copy(alpha = 0.6f))
+                    Text(inferResult!!, fontSize = 12.sp, color = palette.textSecondary)
                 }
 
                 Spacer(Modifier.height(12.dp))
@@ -260,10 +254,7 @@ fun ProfilePersonaScreen(onBack: () -> Unit = {}) {
                         historyCount = 0
                         inferResult = "已清空所有数据"
                     },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Color.Red.copy(alpha = 0.15f),
-                        contentColor = Color.Red
-                    ),
+                    colors = threplyDestructiveButtonColors(),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text("清空画像和历史", fontSize = 14.sp)
@@ -279,11 +270,12 @@ fun ProfilePersonaScreen(onBack: () -> Unit = {}) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun FlowChips(items: List<String>, chipColor: Color = Color.White.copy(alpha = 0.1f)) {
+private fun FlowChips(items: List<String>, chipColor: Color? = null) {
+    val palette = threplyPalette()
     FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         items.forEach { item ->
-            Surface(shape = RoundedCornerShape(16.dp), color = chipColor) {
-                Text(item, fontSize = 13.sp, color = Color.White, modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp))
+            Surface(shape = RoundedCornerShape(16.dp), color = chipColor ?: palette.chipSurface) {
+                Text(item, fontSize = 13.sp, color = palette.textPrimary, modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp))
             }
         }
     }
@@ -292,13 +284,14 @@ private fun FlowChips(items: List<String>, chipColor: Color = Color.White.copy(a
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun FlowChipsRemovable(items: List<String>, onRemove: (String) -> Unit) {
+    val palette = threplyPalette()
     FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         items.forEach { item ->
-            Surface(shape = RoundedCornerShape(16.dp), color = Color.White.copy(alpha = 0.1f)) {
+            Surface(shape = RoundedCornerShape(16.dp), color = palette.chipSurface) {
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp)) {
-                    Text(item, fontSize = 13.sp, color = Color.White)
+                    Text(item, fontSize = 13.sp, color = palette.textPrimary)
                     IconButton(onClick = { onRemove(item) }, modifier = Modifier.size(20.dp)) {
-                        Icon(Icons.Filled.Close, "删除", tint = Color.White.copy(alpha = 0.5f), modifier = Modifier.size(14.dp))
+                        Icon(Icons.Filled.Close, "删除", tint = palette.textTertiary, modifier = Modifier.size(14.dp))
                     }
                 }
             }

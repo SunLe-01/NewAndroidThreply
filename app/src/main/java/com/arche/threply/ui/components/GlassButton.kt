@@ -23,7 +23,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.arche.threply.ui.theme.ThreplyColors
+import com.arche.threply.ui.theme.threplyPalette
 
 /**
  * Primary glass button for onboarding and main actions.
@@ -37,6 +37,7 @@ fun GlassPrimaryButton(
     enabled: Boolean = true,
     trailingIcon: @Composable (() -> Unit)? = null
 ) {
+    val palette = threplyPalette()
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
     val scale by animateFloatAsState(
@@ -51,17 +52,17 @@ fun GlassPrimaryButton(
         modifier = modifier
             .fillMaxWidth()
             .scale(scale)
-            .shadow(24.dp, shape, ambientColor = Color.Black.copy(alpha = 0.3f))
+            .shadow(24.dp, shape, ambientColor = palette.shadowColor)
             .clip(shape)
-            .background(ThreplyColors.glassSurfaceElevated)
+            .background(palette.glassSurfaceElevated)
             .border(
                 width = 1.dp,
                 brush = Brush.linearGradient(
                     colors = listOf(
-                        Color.White.copy(alpha = 0.50f),
-                        Color.White.copy(alpha = 0.10f),
-                        Color.White.copy(alpha = 0.00f),
-                        Color.White.copy(alpha = 0.20f)
+                        palette.glassBorderStrong,
+                        palette.glassBorderSoft,
+                        palette.glassBorderSoft.copy(alpha = 0f),
+                        palette.glassBorderGlow,
                     )
                 ),
                 shape = shape
@@ -80,7 +81,7 @@ fun GlassPrimaryButton(
             text = text,
             fontSize = 16.sp,
             fontWeight = FontWeight.SemiBold,
-            color = if (enabled) Color.White else Color.White.copy(alpha = 0.55f)
+            color = if (enabled) palette.textPrimary else palette.textTertiary,
         )
         if (trailingIcon != null) {
             Spacer(Modifier.width(10.dp))

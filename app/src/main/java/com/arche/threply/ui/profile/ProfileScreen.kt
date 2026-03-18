@@ -1,5 +1,6 @@
 package com.arche.threply.ui.profile
 
+import androidx.appcompat.app.AppCompatDelegate
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -16,7 +17,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.arche.threply.data.BackendSessionStore
 import com.arche.threply.data.PrefsManager
-import com.arche.threply.ui.theme.ThreplyColors
+import com.arche.threply.data.ThemePreference
+import com.arche.threply.ui.theme.threplyCardColors
+import com.arche.threply.ui.theme.threplyDestructiveButtonColors
+import com.arche.threply.ui.theme.threplyPalette
+import com.arche.threply.ui.theme.threplySliderColors
+import com.arche.threply.ui.theme.threplySwitchColors
+import com.arche.threply.ui.theme.threplyTextFieldColors
 
 /**
  * Profile settings screen.
@@ -28,6 +35,7 @@ fun ProfileScreen(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
+    val palette = threplyPalette()
     var displayName by remember { mutableStateOf(PrefsManager.getUserDisplayName(context)) }
     var hapticsEnabled by remember { mutableStateOf(PrefsManager.isHapticsEnabled(context)) }
     var hapticStrength by remember { mutableStateOf(PrefsManager.getHapticStrength(context)) }
@@ -35,6 +43,7 @@ fun ProfileScreen(
     var backendBaseURL by remember { mutableStateOf(PrefsManager.getBackendBaseURL(context)) }
     var languagePreference by remember { mutableStateOf(PrefsManager.getLanguagePreference(context)) }
     var handedness by remember { mutableStateOf(PrefsManager.getHandedness(context)) }
+    var themePreference by remember { mutableStateOf(PrefsManager.getThemePreference(context)) }
     var showPersonaScreen by remember { mutableStateOf(false) }
 
     if (showPersonaScreen) {
@@ -54,13 +63,13 @@ fun ProfileScreen(
             text = "个人中心",
             fontSize = 22.sp,
             fontWeight = FontWeight.Bold,
-            color = Color.White,
+            color = palette.textPrimary,
             modifier = Modifier.padding(vertical = 16.dp)
         )
 
         // ─── User Info ───
         Card(
-            colors = CardDefaults.cardColors(containerColor = ThreplyColors.glassSurface),
+            colors = threplyCardColors(),
             modifier = Modifier.fillMaxWidth()
         ) {
             Row(
@@ -71,20 +80,20 @@ fun ProfileScreen(
                 Surface(
                     modifier = Modifier.size(48.dp),
                     shape = CircleShape,
-                    color = Color.Gray.copy(alpha = 0.2f)
+                    color = palette.avatarSurface,
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Text(
                             text = displayName.take(1),
                             fontSize = 17.sp,
                             fontWeight = FontWeight.SemiBold,
-                            color = Color.White
+                            color = palette.textPrimary,
                         )
                     }
                 }
                 Column {
-                    Text(displayName, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
-                    Text("threply 用户", fontSize = 14.sp, color = Color.White.copy(alpha = 0.6f))
+                    Text(displayName, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
+                    Text("threply 用户", fontSize = 14.sp, color = palette.textSecondary)
                 }
             }
         }
@@ -92,13 +101,27 @@ fun ProfileScreen(
         Spacer(Modifier.height(16.dp))
 
         // ─── Preferences ───
-        Text("偏好设置", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color.White.copy(alpha = 0.6f), modifier = Modifier.padding(bottom = 8.dp))
+        Text("偏好设置", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = palette.textTertiary, modifier = Modifier.padding(bottom = 8.dp))
 
         Card(
-            colors = CardDefaults.cardColors(containerColor = ThreplyColors.glassSurface),
+            colors = threplyCardColors(),
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
+                SettingsPickerRow(
+                    title = "界面主题",
+                    options = ThemePreference.entries.map { it.storageValue to it.label },
+                    selected = themePreference.storageValue,
+                    onSelected = {
+                        val preference = ThemePreference.fromStorage(it)
+                        themePreference = preference
+                        PrefsManager.setThemePreference(context, preference)
+                        AppCompatDelegate.setDefaultNightMode(preference.nightMode)
+                    }
+                )
+
+                HorizontalDivider(color = palette.glassBorderSoft, modifier = Modifier.padding(vertical = 8.dp))
+
                 // Haptics toggle
                 SettingsToggleRow(
                     title = "触感反馈",
@@ -110,7 +133,7 @@ fun ProfileScreen(
                     }
                 )
 
-                HorizontalDivider(color = Color.White.copy(alpha = 0.08f), modifier = Modifier.padding(vertical = 8.dp))
+                HorizontalDivider(color = palette.glassBorderSoft, modifier = Modifier.padding(vertical = 8.dp))
 
                 // Haptic strength slider
                 Column {
@@ -118,8 +141,8 @@ fun ProfileScreen(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text("触感强度", fontSize = 15.sp, color = Color.White)
-                        Text("${(hapticStrength * 100).toInt()}%", fontSize = 15.sp, color = Color.White.copy(alpha = 0.6f))
+                        Text("触感强度", fontSize = 15.sp, color = palette.textPrimary)
+                        Text("${(hapticStrength * 100).toInt()}%", fontSize = 15.sp, color = palette.textSecondary)
                     }
                     Slider(
                         value = hapticStrength,
@@ -129,16 +152,12 @@ fun ProfileScreen(
                         },
                         valueRange = 0f..1f,
                         steps = 19,
-                        colors = SliderDefaults.colors(
-                            thumbColor = Color.White,
-                            activeTrackColor = Color.White.copy(alpha = 0.8f),
-                            inactiveTrackColor = Color.White.copy(alpha = 0.15f)
-                        )
+                        colors = threplySliderColors()
                     )
-                    Text("调整键盘打字时震动强弱", fontSize = 12.sp, color = Color.White.copy(alpha = 0.5f))
+                    Text("调整键盘打字时震动强弱", fontSize = 12.sp, color = palette.textTertiary)
                 }
 
-                HorizontalDivider(color = Color.White.copy(alpha = 0.08f), modifier = Modifier.padding(vertical = 8.dp))
+                HorizontalDivider(color = palette.glassBorderSoft, modifier = Modifier.padding(vertical = 8.dp))
 
                 // Auto sentence punctuation
                 SettingsToggleRow(
@@ -151,7 +170,7 @@ fun ProfileScreen(
                     }
                 )
 
-                HorizontalDivider(color = Color.White.copy(alpha = 0.08f), modifier = Modifier.padding(vertical = 8.dp))
+                HorizontalDivider(color = palette.glassBorderSoft, modifier = Modifier.padding(vertical = 8.dp))
 
                 // Language picker
                 SettingsPickerRow(
@@ -164,7 +183,7 @@ fun ProfileScreen(
                     }
                 )
 
-                HorizontalDivider(color = Color.White.copy(alpha = 0.08f), modifier = Modifier.padding(vertical = 8.dp))
+                HorizontalDivider(color = palette.glassBorderSoft, modifier = Modifier.padding(vertical = 8.dp))
 
                 // Handedness picker
                 SettingsPickerRow(
@@ -182,10 +201,10 @@ fun ProfileScreen(
         Spacer(Modifier.height(16.dp))
 
         // ─── AI Persona ───
-        Text("AI 个性化", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color.White.copy(alpha = 0.6f), modifier = Modifier.padding(bottom = 8.dp))
+        Text("AI 个性化", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = palette.textTertiary, modifier = Modifier.padding(bottom = 8.dp))
 
         Card(
-            colors = CardDefaults.cardColors(containerColor = ThreplyColors.glassSurface),
+            colors = threplyCardColors(),
             modifier = Modifier.fillMaxWidth(),
             onClick = { showPersonaScreen = true }
         ) {
@@ -197,20 +216,20 @@ fun ProfileScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("用户形象", fontSize = 15.sp, color = Color.White)
-                    Text("管理兴趣、口头禅、语气偏好", fontSize = 12.sp, color = Color.White.copy(alpha = 0.5f))
+                    Text("用户形象", fontSize = 15.sp, color = palette.textPrimary)
+                    Text("管理兴趣、口头禅、语气偏好", fontSize = 12.sp, color = palette.textTertiary)
                 }
-                Text("›", fontSize = 20.sp, color = Color.White.copy(alpha = 0.5f))
+                Text("›", fontSize = 20.sp, color = palette.textTertiary)
             }
         }
 
         Spacer(Modifier.height(16.dp))
 
         // ─── Backend ───
-        Text("后端服务", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color.White.copy(alpha = 0.6f), modifier = Modifier.padding(bottom = 8.dp))
+        Text("后端服务", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = palette.textTertiary, modifier = Modifier.padding(bottom = 8.dp))
 
         Card(
-            colors = CardDefaults.cardColors(containerColor = ThreplyColors.glassSurface),
+            colors = threplyCardColors(),
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
@@ -223,22 +242,14 @@ fun ProfileScreen(
                     label = { Text("后端地址") },
                     placeholder = { Text("例如 https://api.arche.pw/v1") },
                     singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White.copy(alpha = 0.8f),
-                        focusedBorderColor = Color.White.copy(alpha = 0.5f),
-                        unfocusedBorderColor = Color.White.copy(alpha = 0.2f),
-                        cursorColor = Color.White,
-                        focusedLabelColor = Color.White.copy(alpha = 0.7f),
-                        unfocusedLabelColor = Color.White.copy(alpha = 0.5f)
-                    ),
+                    colors = threplyTextFieldColors(),
                     modifier = Modifier.fillMaxWidth()
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(
                     text = "键盘扩展和辅助功能会读取这个地址。修改后建议重新打开键盘。",
                     fontSize = 12.sp,
-                    color = Color.White.copy(alpha = 0.5f)
+                    color = palette.textTertiary,
                 )
             }
         }
@@ -246,10 +257,10 @@ fun ProfileScreen(
         Spacer(Modifier.height(16.dp))
 
         // ─── Developer ───
-        Text("开发者", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color.White.copy(alpha = 0.6f), modifier = Modifier.padding(bottom = 8.dp))
+        Text("开发者", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = palette.textTertiary, modifier = Modifier.padding(bottom = 8.dp))
 
         Card(
-            colors = CardDefaults.cardColors(containerColor = ThreplyColors.glassSurface),
+            colors = threplyCardColors(),
             modifier = Modifier.fillMaxWidth(),
             onClick = {
                 // TODO: Navigate to developer menu
@@ -262,8 +273,8 @@ fun ProfileScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("开发者模式", fontSize = 15.sp, color = Color.White)
-                Text("›", fontSize = 20.sp, color = Color.White.copy(alpha = 0.5f))
+                Text("开发者模式", fontSize = 15.sp, color = palette.textPrimary)
+                Text("›", fontSize = 20.sp, color = palette.textTertiary)
             }
         }
 
@@ -279,10 +290,7 @@ fun ProfileScreen(
                 BackendSessionStore.clearSession(context)
                 onLogout()
             },
-            colors = ButtonDefaults.buttonColors(
-                containerColor = Color.Red.copy(alpha = 0.15f),
-                contentColor = Color.Red
-            ),
+            colors = threplyDestructiveButtonColors(),
             modifier = Modifier.fillMaxWidth()
         ) {
             Text("退出登陆", fontSize = 15.sp)
@@ -301,24 +309,20 @@ private fun SettingsToggleRow(
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit
 ) {
+    val palette = threplyPalette()
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(modifier = Modifier.weight(1f)) {
-            Text(title, fontSize = 15.sp, color = Color.White)
-            Text(subtitle, fontSize = 12.sp, color = Color.White.copy(alpha = 0.5f))
+            Text(title, fontSize = 15.sp, color = palette.textPrimary)
+            Text(subtitle, fontSize = 12.sp, color = palette.textTertiary)
         }
         Switch(
             checked = checked,
             onCheckedChange = onCheckedChange,
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = Color.White,
-                checkedTrackColor = Color.White.copy(alpha = 0.3f),
-                uncheckedThumbColor = Color.White.copy(alpha = 0.6f),
-                uncheckedTrackColor = Color.White.copy(alpha = 0.1f)
-            )
+            colors = threplySwitchColors()
         )
     }
 }
@@ -330,6 +334,7 @@ private fun SettingsPickerRow(
     selected: String,
     onSelected: (String) -> Unit
 ) {
+    val palette = threplyPalette()
     var expanded by remember { mutableStateOf(false) }
     val selectedLabel = options.find { it.first == selected }?.second ?: options[0].second
 
@@ -338,10 +343,10 @@ private fun SettingsPickerRow(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(title, fontSize = 15.sp, color = Color.White)
+        Text(title, fontSize = 15.sp, color = palette.textPrimary)
         Box {
             TextButton(onClick = { expanded = true }) {
-                Text(selectedLabel, color = Color.White.copy(alpha = 0.7f))
+                Text(selectedLabel, color = palette.textSecondary)
             }
             DropdownMenu(
                 expanded = expanded,

@@ -2,6 +2,7 @@ package com.arche.threply.ui.onboarding
 
 import android.content.Intent
 import android.provider.Settings
+import android.widget.Toast
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
@@ -41,9 +42,13 @@ import com.arche.threply.ui.components.GlassPanel
 import com.arche.threply.ui.components.GlassPrimaryButton
 import com.arche.threply.ui.components.LiquidGlassBackdrop
 import com.arche.threply.ui.theme.ThreplyColors
+import com.arche.threply.ui.theme.threplyPalette
+import com.arche.threply.ui.theme.threplyPrimaryButtonColors
 import com.arche.threply.util.HapticsUtil
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 // ─── Onboarding Steps ───
 
@@ -69,19 +74,55 @@ fun OnboardingScreen(onFinish: () -> Unit) {
     var isCelebrating by remember { mutableStateOf(false) }
     var didOpenShortcut by remember { mutableStateOf(false) }
     var imeStatus by remember { mutableStateOf(ImeSetupHelper.status(context)) }
+    var imeStatusRefreshTick by remember { mutableIntStateOf(0) }
     val steps = OnboardingStep.entries
 
     val currentStep = steps[currentIndex.coerceIn(0, steps.lastIndex)]
     val pageHorizontalInset = 2.dp
 
+    fun refreshImeStatus(): ImeSetupHelper.Status {
+        return ImeSetupHelper.status(context).also { refreshed ->
+            imeStatus = refreshed
+            imeStatusRefreshTick++
+        }
+    }
+
+    fun openImeSettingsWithHint(message: String) {
+        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+        ImeSetupHelper.openInputMethodSettings(context)
+    }
+
+    fun promptImeSelection(message: String = "请在系统设置里选择 Threply 为默认键盘") {
+        val showedPicker = ImeSetupHelper.showInputMethodPicker(context)
+        if (!showedPicker) {
+            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+            ImeSetupHelper.openInputMethodSettings(context)
+        } else {
+            Toast.makeText(context, "请在弹窗里选择 Threply", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     DisposableEffect(lifecycleOwner, context) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 imeStatus = ImeSetupHelper.status(context)
+                imeStatusRefreshTick++
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    LaunchedEffect(currentStep, imeStatusRefreshTick) {
+        if (currentStep != OnboardingStep.PERMISSIONS || !imeStatus.isEnabled || imeStatus.isSelected) return@LaunchedEffect
+        repeat(6) {
+            delay(350)
+            val refreshed = ImeSetupHelper.status(context)
+            if (refreshed != imeStatus) {
+                imeStatus = refreshed
+            }
+            if (refreshed.isSelected) return@LaunchedEffect
+        }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -133,13 +174,19 @@ fun OnboardingScreen(onFinish: () -> Unit) {
                 AnimatedContent(
                     targetState = currentStep,
                     transitionSpec = {
-                        val forward = targetState.ordinal >= initialState.ordinal
-                        if (forward) {
-                            (slideInHorizontally { it } + fadeIn()) togetherWith
-                                    (slideOutHorizontally { -it } + fadeOut())
+                        val involvesPersona =
+                            targetState == OnboardingStep.PERSONA || initialState == OnboardingStep.PERSONA
+                        if (involvesPersona) {
+                            fadeIn(tween(220)) togetherWith fadeOut(tween(160))
                         } else {
-                            (slideInHorizontally { -it } + fadeIn()) togetherWith
-                                    (slideOutHorizontally { it } + fadeOut())
+                            val forward = targetState.ordinal >= initialState.ordinal
+                            if (forward) {
+                                (slideInHorizontally { it } + fadeIn()) togetherWith
+                                        (slideOutHorizontally { -it } + fadeOut())
+                            } else {
+                                (slideInHorizontally { -it } + fadeIn()) togetherWith
+                                        (slideOutHorizontally { it } + fadeOut())
+                            }
                         }
                     },
                     label = "pageContent"
@@ -160,9 +207,71 @@ fun OnboardingScreen(onFinish: () -> Unit) {
             }
 
             // Bottom CTA
-            when (currentStep) {
-                OnboardingStep.PERMISSIONS -> {
-                    if (imeStatus.isEnabled && imeStatus.isSelected) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .padding(bottom = 8.dp)
+            ) {
+                when (currentStep) {
+                    OnboardingStep.PERMISSIONS -> {
+                        val palette = threplyPalette()
+                        if (imeStatus.isEnabled && imeStatus.isSelected) {
+                            GlassPrimaryButton(
+                                text = "继续",
+                                onClick = {
+                                    completedIndex = maxOf(completedIndex, currentIndex)
+                                    currentIndex = (currentIndex + 1).coerceAtMost(steps.lastIndex)
+                                },
+                                trailingIcon = {
+                                    Icon(Icons.Filled.ChevronRight, null, tint = palette.textPrimary, modifier = Modifier.size(16.dp))
+                                }
+                            )
+                        } else {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                GlassPrimaryButton(
+                                    text = if (!imeStatus.isEnabled) "启用键盘" else "选择 Threply",
+                                    onClick = {
+                                        if (!imeStatus.isEnabled) {
+                                            openImeSettingsWithHint("请先在系统设置里启用 Threply 键盘")
+                                        } else {
+                                            promptImeSelection()
+                                        }
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                    trailingIcon = {
+                                        Icon(Icons.Filled.OpenInNew, null, tint = palette.textPrimary, modifier = Modifier.size(16.dp))
+                                    }
+                                )
+                                GlassPrimaryButton(
+                                    text = if (!imeStatus.isEnabled) "我已开启" else "我已切换",
+                                    onClick = {
+                                        refreshImeStatus()
+                                        completedIndex = maxOf(completedIndex, currentIndex)
+                                        currentIndex = (currentIndex + 1).coerceAtMost(steps.lastIndex)
+                                    },
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        }
+                    }
+                    OnboardingStep.SHORTCUTS -> {
+                        GlassPrimaryButton(
+                            text = "继续",
+                            onClick = {
+                                completedIndex = maxOf(completedIndex, currentIndex)
+                                currentIndex = (currentIndex + 1).coerceAtMost(steps.lastIndex)
+                            },
+                            enabled = didOpenShortcut,
+                            trailingIcon = {
+                                Icon(Icons.Filled.ChevronRight, null, tint = threplyPalette().textPrimary, modifier = Modifier.size(16.dp))
+                            }
+                        )
+                    }
+                    OnboardingStep.SKILLS -> {
                         GlassPrimaryButton(
                             text = "继续",
                             onClick = {
@@ -170,101 +279,43 @@ fun OnboardingScreen(onFinish: () -> Unit) {
                                 currentIndex = (currentIndex + 1).coerceAtMost(steps.lastIndex)
                             },
                             trailingIcon = {
-                                Icon(Icons.Filled.ChevronRight, null, tint = Color.White, modifier = Modifier.size(16.dp))
+                                Icon(Icons.Filled.ChevronRight, null, tint = threplyPalette().textPrimary, modifier = Modifier.size(16.dp))
                             }
                         )
-                    } else {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            GlassPrimaryButton(
-                                text = if (!imeStatus.isEnabled) "启用键盘" else "选择 Threply",
-                                onClick = {
-                                    if (!imeStatus.isEnabled) {
-                                        val intent = Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)
-                                        context.startActivity(intent)
-                                    } else {
-                                        ImeSetupHelper.showInputMethodPicker(context)
-                                    }
-                                },
-                                modifier = Modifier.weight(1f),
-                                trailingIcon = {
-                                    Icon(Icons.Filled.OpenInNew, null, tint = Color.White, modifier = Modifier.size(16.dp))
-                                }
-                            )
-                            OutlinedButton(
-                                onClick = {
-                                    val intent = Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)
-                                    context.startActivity(intent)
-                                },
-                                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
-                                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.35f)),
-                                shape = RoundedCornerShape(16.dp),
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Text("系统设置")
-                            }
-                        }
                     }
-                }
-                OnboardingStep.SHORTCUTS -> {
-                    GlassPrimaryButton(
-                        text = "继续",
-                        onClick = {
-                            completedIndex = maxOf(completedIndex, currentIndex)
-                            currentIndex = (currentIndex + 1).coerceAtMost(steps.lastIndex)
-                        },
-                        enabled = didOpenShortcut,
-                        trailingIcon = {
-                            Icon(Icons.Filled.ChevronRight, null, tint = Color.White, modifier = Modifier.size(16.dp))
-                        }
-                    )
-                }
-                OnboardingStep.SKILLS -> {
-                    GlassPrimaryButton(
-                        text = "继续",
-                        onClick = {
-                            completedIndex = maxOf(completedIndex, currentIndex)
-                            currentIndex = (currentIndex + 1).coerceAtMost(steps.lastIndex)
-                        },
-                        trailingIcon = {
-                            Icon(Icons.Filled.ChevronRight, null, tint = Color.White, modifier = Modifier.size(16.dp))
-                        }
-                    )
-                }
-                OnboardingStep.PERSONA -> {
-                    PersonaBottomButtons(
-                        onSkip = {
-                            completedIndex = OnboardingStep.DONE.ordinal
-                            currentIndex = OnboardingStep.DONE.ordinal
-                            scope.launch {
-                                delay(360)
-                                isCelebrating = true
+                    OnboardingStep.PERSONA -> {
+                        PersonaBottomButtons(
+                            onSkip = {
+                                completedIndex = OnboardingStep.DONE.ordinal
+                                currentIndex = OnboardingStep.DONE.ordinal
+                                scope.launch {
+                                    delay(360)
+                                    isCelebrating = true
+                                }
+                            },
+                            onFinish = {
+                                completedIndex = OnboardingStep.DONE.ordinal
+                                currentIndex = OnboardingStep.DONE.ordinal
+                                scope.launch {
+                                    delay(360)
+                                    isCelebrating = true
+                                }
                             }
-                        },
-                        onFinish = {
-                            completedIndex = OnboardingStep.DONE.ordinal
-                            currentIndex = OnboardingStep.DONE.ordinal
-                            scope.launch {
-                                delay(360)
-                                isCelebrating = true
+                        )
+                    }
+                    OnboardingStep.DONE -> {
+                        GlassPrimaryButton(
+                            text = "进入 Threply",
+                            onClick = onFinish,
+                            trailingIcon = {
+                                Icon(Icons.Filled.ArrowForward, null, tint = threplyPalette().textPrimary, modifier = Modifier.size(16.dp))
                             }
-                        }
-                    )
-                }
-                OnboardingStep.DONE -> {
-                    GlassPrimaryButton(
-                        text = "进入 Threply",
-                        onClick = onFinish,
-                        trailingIcon = {
-                            Icon(Icons.Filled.ArrowForward, null, tint = Color.White, modifier = Modifier.size(16.dp))
-                        }
-                    )
+                        )
+                    }
                 }
             }
 
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(6.dp))
         }
     }
 }
@@ -279,6 +330,7 @@ private fun OnboardingProgressPill(
     onSelectIndex: (Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val palette = threplyPalette()
     val shape = RoundedCornerShape(22.dp)
     val animatedCoveredSteps by animateFloatAsState(
         targetValue = (currentIndex + 1).coerceAtLeast(1).toFloat(),
@@ -290,7 +342,7 @@ private fun OnboardingProgressPill(
         modifier = modifier
             .fillMaxWidth()
             .height(44.dp)
-            .shadow(24.dp, shape, ambientColor = Color.Black.copy(alpha = 0.25f))
+            .shadow(24.dp, shape, ambientColor = palette.shadowColor)
     ) {
         // Background track
         Box(
@@ -315,12 +367,12 @@ private fun OnboardingProgressPill(
                     .background(
                         Brush.horizontalGradient(
                             colors = listOf(
-                                Color.White.copy(alpha = 0.12f),
-                                Color.White.copy(alpha = 0.08f)
+                                palette.secondaryButtonContainer,
+                                palette.glassSurface,
                             )
                         )
                     )
-                    .border(1.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(20.dp))
+                    .border(1.dp, palette.glassBorderMedium, RoundedCornerShape(20.dp))
             )
         }
 
@@ -349,13 +401,15 @@ private fun OnboardingProgressPill(
                             modifier = Modifier
                                 .size(20.dp)
                                 .clip(CircleShape)
-                                .background(Color.White.copy(alpha = if (isActive) 0.28f else 0.14f)),
+                                .background(
+                                    if (isActive) palette.secondaryButtonContainer else palette.chipSurface
+                                ),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 Icons.Filled.Check,
                                 contentDescription = null,
-                                tint = Color.White.copy(alpha = 0.95f),
+                                tint = palette.textPrimary,
                                 modifier = Modifier.size(13.dp)
                             )
                         }
@@ -363,7 +417,7 @@ private fun OnboardingProgressPill(
                         Icon(
                             step.icon,
                             contentDescription = step.title,
-                            tint = Color.White.copy(alpha = if (isActive) 0.92f else 0.55f),
+                            tint = if (isActive) palette.textPrimary else palette.textTertiary,
                             modifier = Modifier.size(17.dp)
                         )
                     }
@@ -375,6 +429,7 @@ private fun OnboardingProgressPill(
 
 @Composable
 private fun CelebrationCircle(modifier: Modifier = Modifier) {
+    val palette = threplyPalette()
     val scale by animateFloatAsState(
         targetValue = 1f,
         animationSpec = spring(dampingRatio = 0.7f, stiffness = 400f),
@@ -385,23 +440,23 @@ private fun CelebrationCircle(modifier: Modifier = Modifier) {
         modifier = modifier
             .size(74.dp)
             .scale(scale)
-            .shadow(26.dp, CircleShape, ambientColor = Color.Black.copy(alpha = 0.35f))
+            .shadow(26.dp, CircleShape, ambientColor = palette.shadowColor)
             .clip(CircleShape)
             .background(
                 Brush.linearGradient(
                     colors = listOf(
-                        Color.White.copy(alpha = 0.35f),
-                        Color.White.copy(alpha = 0.15f)
+                        palette.secondaryButtonContainer,
+                        palette.glassSurface,
                     )
                 )
             )
-            .border(1.dp, Color.White.copy(alpha = 0.22f), CircleShape),
+            .border(1.dp, palette.glassBorderMedium, CircleShape),
         contentAlignment = Alignment.Center
     ) {
         Icon(
             Icons.Filled.Check,
             contentDescription = "完成",
-            tint = Color.White,
+            tint = palette.textPrimary,
             modifier = Modifier.size(22.dp)
         )
     }
@@ -411,6 +466,7 @@ private fun CelebrationCircle(modifier: Modifier = Modifier) {
 
 @Composable
 private fun PermissionsPage(imeStatus: ImeSetupHelper.Status) {
+    val palette = threplyPalette()
     GlassPanel(
         title = "键盘与权限",
         subtitle = "在系统设置中启用 Threply 键盘，开启后即可继续。"
@@ -426,14 +482,46 @@ private fun PermissionsPage(imeStatus: ImeSetupHelper.Status) {
                 subtitle = "选择 Threply 为当前输入法",
                 isOn = imeStatus.isSelected
             )
+            if (imeStatus.isEnabled && !imeStatus.isSelected) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(palette.chipSurface)
+                        .border(1.dp, palette.glassBorderSoft, RoundedCornerShape(16.dp))
+                        .padding(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.Top
+                ) {
+                    Icon(
+                        Icons.Filled.AutoAwesome,
+                        contentDescription = null,
+                        tint = Color(0xFFFFD36A),
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = "还差最后一步",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = palette.textPrimary,
+                        )
+                        Text(
+                            text = "点下方“选择 Threply”，在系统弹出的输入法选择器里选中 Threply。选好后返回这里，点“我已切换”。",
+                            fontSize = 12.sp,
+                            color = palette.textSecondary,
+                        )
+                    }
+                }
+            }
             Text(
                 text = when {
                     !imeStatus.isEnabled -> "先在系统设置里启用 Threply 键盘。"
-                    !imeStatus.isSelected -> "启用后，再把当前输入法切换到 Threply。"
+                    !imeStatus.isSelected -> "如果系统没有弹出输入法选择器，请改用系统设置，再返回本页重新检查。"
                     else -> "状态已就绪，可以继续下一步。"
                 },
                 fontSize = 12.sp,
-                color = Color.White.copy(alpha = 0.7f),
+                color = palette.textSecondary,
                 modifier = Modifier.padding(top = 6.dp)
             )
         }
@@ -446,6 +534,7 @@ private fun ShortcutsPage(
     onOpenShortcut: () -> Unit
 ) {
     val context = LocalContext.current
+    val palette = threplyPalette()
 
     GlassPanel(
         title = "辅助功能设置",
@@ -459,10 +548,7 @@ private fun ShortcutsPage(
                     val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
                     context.startActivity(intent)
                 },
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color.White,
-                    contentColor = Color.Black
-                ),
+                colors = threplyPrimaryButtonColors(),
                 shape = RoundedCornerShape(14.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -484,13 +570,13 @@ private fun ShortcutsPage(
                 Icon(
                     if (didOpenShortcut) Icons.Filled.CheckCircle else Icons.Filled.RadioButtonUnchecked,
                     contentDescription = null,
-                    tint = if (didOpenShortcut) ThreplyColors.green else Color.White.copy(alpha = 0.35f),
+                    tint = if (didOpenShortcut) ThreplyColors.green else palette.textTertiary,
                     modifier = Modifier.size(20.dp)
                 )
                 Text(
                     text = if (didOpenShortcut) "已打开设置页面" else "打开设置后即可继续",
                     fontSize = 14.sp,
-                    color = Color.White.copy(alpha = 0.85f)
+                    color = palette.textPrimary,
                 )
             }
         }
@@ -499,6 +585,7 @@ private fun ShortcutsPage(
 
 @Composable
 private fun SkillsPage() {
+    val palette = threplyPalette()
     GlassPanel(
         title = "使用 Skills",
         subtitle = "（暂时）"
@@ -506,13 +593,14 @@ private fun SkillsPage() {
         Text(
             text = "Skills 将用于快速套用不同的回复风格。",
             fontSize = 15.sp,
-            color = Color.White.copy(alpha = 0.85f)
+            color = palette.textPrimary,
         )
     }
 }
 
 @Composable
 private fun WelcomePage() {
+    val palette = threplyPalette()
     Column(
         modifier = Modifier.fillMaxSize(),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -524,7 +612,7 @@ private fun WelcomePage() {
             text = "welcome to",
             fontSize = 20.sp,
             fontWeight = FontWeight.SemiBold,
-            color = Color.White.copy(alpha = 0.82f)
+            color = palette.textSecondary,
         )
 
         Spacer(Modifier.height(8.dp))
@@ -533,7 +621,7 @@ private fun WelcomePage() {
             text = "Threply",
             fontSize = 36.sp,
             fontWeight = FontWeight.Bold,
-            color = Color.White
+            color = palette.textPrimary,
         )
 
         Spacer(Modifier.height(16.dp))
@@ -541,7 +629,7 @@ private fun WelcomePage() {
         Text(
             text = "一切准备就绪。",
             fontSize = 14.sp,
-            color = Color.White.copy(alpha = 0.75f)
+            color = palette.textSecondary,
         )
 
         Spacer(Modifier.weight(1f))
@@ -556,13 +644,14 @@ private fun PermissionRow(
     subtitle: String,
     isOn: Boolean
 ) {
+    val palette = threplyPalette()
     val shape = RoundedCornerShape(18.dp)
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(shape)
-            .background(Color.White.copy(alpha = 0.06f))
-            .border(1.dp, Color.White.copy(alpha = 0.12f), shape)
+            .background(palette.chipSurface)
+            .border(1.dp, palette.glassBorderSoft, shape)
             .padding(12.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.Top
@@ -571,14 +660,14 @@ private fun PermissionRow(
             modifier = Modifier
                 .size(34.dp)
                 .clip(CircleShape)
-                .background(if (isOn) ThreplyColors.green.copy(alpha = 0.22f) else Color.White.copy(alpha = 0.08f))
-                .border(1.dp, Color.White.copy(alpha = 0.14f), CircleShape),
+                .background(if (isOn) ThreplyColors.green.copy(alpha = 0.22f) else palette.secondaryButtonContainer)
+                .border(1.dp, palette.glassBorderMedium, CircleShape),
             contentAlignment = Alignment.Center
         ) {
             Icon(
                 if (isOn) Icons.Filled.Check else Icons.Filled.RadioButtonUnchecked,
                 contentDescription = null,
-                tint = if (isOn) ThreplyColors.green else Color.White.copy(alpha = 0.35f),
+                tint = if (isOn) ThreplyColors.green else palette.textTertiary,
                 modifier = Modifier.size(14.dp)
             )
         }
@@ -588,12 +677,12 @@ private fun PermissionRow(
                 text = title,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.SemiBold,
-                color = Color.White.copy(alpha = 0.92f)
+                color = palette.textPrimary,
             )
             Text(
                 text = subtitle,
                 fontSize = 12.sp,
-                color = Color.White.copy(alpha = 0.6f)
+                color = palette.textSecondary,
             )
         }
     }
@@ -646,6 +735,7 @@ private val personaCategories = listOf(
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun PersonaPage() {
+    val palette = threplyPalette()
     val context = LocalContext.current
     val view = LocalView.current
     val selections = remember {
@@ -653,29 +743,62 @@ private fun PersonaPage() {
             personaCategories.indices.forEach { put(it, emptySet()) }
         }
     }
-    val selectionSnapshot = personaCategories.mapIndexed { catIndex, category ->
-        category.presets.filter { tag -> tag in selections[catIndex].orEmpty() }
+    var persistedProfile by remember { mutableStateOf(UserProfile()) }
+    var hasHydratedSelections by remember { mutableStateOf(false) }
+    var hasSeenInitialSelectionSnapshot by remember { mutableStateOf(false) }
+    val selectionSnapshot by remember {
+        derivedStateOf {
+            personaCategories.mapIndexed { catIndex, category ->
+                category.presets.filter { tag -> tag in selections[catIndex].orEmpty() }
+            }
+        }
     }
-    val selectedTags = selectionSnapshot.flatten()
-    val categorySelectionState = selectionSnapshot.map { it.isNotEmpty() }
-    val previewText = buildPersonaPreview(selectionSnapshot)
+    val selectedTags by remember {
+        derivedStateOf { selectionSnapshot.flatten() }
+    }
+    val categorySelectionState by remember {
+        derivedStateOf { selectionSnapshot.map { it.isNotEmpty() } }
+    }
+    val previewText by remember {
+        derivedStateOf { buildPersonaPreview(selectionSnapshot) }
+    }
 
-    // Save selections to UserProfileStore whenever they change
-    LaunchedEffect(selectionSnapshot) {
+    LaunchedEffect(Unit) {
+        val existing = withContext(Dispatchers.IO) {
+            UserProfileStore.get(context)
+        }
+        persistedProfile = existing
+        selections[0] = existing.personalityTags.toSet()
+        selections[1] = existing.interests.toSet()
+        selections[2] = existing.catchphrases.toSet()
+        selections[3] = existing.favoriteThings.toSet()
+        hasHydratedSelections = true
+    }
+
+    // Persist only after the initial state has hydrated, so page entry stays light.
+    LaunchedEffect(hasHydratedSelections, selectionSnapshot) {
+        if (!hasHydratedSelections) return@LaunchedEffect
+        if (!hasSeenInitialSelectionSnapshot) {
+            hasSeenInitialSelectionSnapshot = true
+            return@LaunchedEffect
+        }
+
         val personality = selectionSnapshot.getOrElse(0) { emptyList() }
         val interests = selectionSnapshot.getOrElse(1) { emptyList() }
         val catchphrases = selectionSnapshot.getOrElse(2) { emptyList() }
         val favorites = selectionSnapshot.getOrElse(3) { emptyList() }
 
-        val existing = UserProfileStore.get(context)
-        val updated = existing.copy(
+        val updated = persistedProfile.copy(
             personalityTags = personality,
             interests = interests,
             catchphrases = catchphrases,
             favoriteThings = favorites
         )
-        UserProfileStore.save(context, updated)
-        PrefsManager.setProfileEnabled(context, true)
+        persistedProfile = updated
+        withContext(Dispatchers.IO) {
+            UserProfileStore.save(context, updated)
+            PrefsManager.setProfileEnabled(context, true)
+        }
     }
 
     Column(
@@ -688,13 +811,13 @@ private fun PersonaPage() {
             text = "打造你的 AI 画像",
             fontSize = 30.sp,
             fontWeight = FontWeight.Bold,
-            color = Color.White,
+            color = palette.textPrimary,
             modifier = Modifier.padding(bottom = 6.dp)
         )
         Text(
             text = "选几个能代表你的标签，AI 回复会更贴近你的风格。后续也可以在个人中心继续修改。",
             fontSize = 14.sp,
-            color = Color.White.copy(alpha = 0.7f),
+            color = palette.textSecondary,
             lineHeight = 21.sp,
             modifier = Modifier.padding(bottom = 18.dp)
         )
@@ -718,15 +841,13 @@ private fun PersonaPage() {
             }
             PersonaCategoryCard(
                 category = category,
-                selectedCount = selected.size,
-                orderIndex = catIndex
+                selectedCount = selected.size
             ) {
-                category.presets.forEachIndexed { chipIndex, tag ->
+                category.presets.forEach { tag ->
                     PersonaChip(
                         text = tag,
                         accentColor = category.accentColor,
                         isSelected = tag in selected,
-                        enterDelayMillis = 40 + chipIndex * 18,
                         onClick = { toggleTag(tag) }
                     )
                 }
@@ -768,6 +889,7 @@ private fun PersonaHeroCard(
     previewText: String,
     selectedTags: List<String>
 ) {
+    val palette = threplyPalette()
     val transition = rememberInfiniteTransition(label = "personaHero")
     val drift by transition.animateFloat(
         initialValue = 0f,
@@ -796,8 +918,8 @@ private fun PersonaHeroCard(
             .background(
                 brush = Brush.linearGradient(
                     colors = listOf(
-                        Color.White.copy(alpha = 0.12f),
-                        Color.White.copy(alpha = 0.04f),
+                        palette.secondaryButtonContainer,
+                        palette.chipSurface,
                         Color.Transparent
                     )
                 ),
@@ -807,16 +929,15 @@ private fun PersonaHeroCard(
                 width = 1.dp,
                 brush = Brush.linearGradient(
                     colors = listOf(
-                        Color.White.copy(alpha = 0.38f),
-                        Color.White.copy(alpha = 0.12f),
-                        Color.White.copy(alpha = 0.08f),
-                        Color.White.copy(alpha = 0.25f)
+                        palette.glassBorderStrong,
+                        palette.glassBorderMedium,
+                        palette.glassBorderSoft,
+                        palette.glassBorderGlow,
                     )
                 ),
                 shape = shape
             )
             .padding(20.dp)
-            .animateContentSize()
     ) {
         Canvas(modifier = Modifier.matchParentSize()) {
             val heroColors = when (activeColors.size) {
@@ -863,28 +984,28 @@ private fun PersonaHeroCard(
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Surface(
                         shape = RoundedCornerShape(999.dp),
-                        color = Color.White.copy(alpha = 0.08f),
-                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.15f))
+                        color = palette.secondaryButtonContainer,
+                        border = BorderStroke(1.dp, palette.glassBorderMedium)
                     ) {
                         Text(
                             text = if (selectedCount == 0) "实时预览" else "画像正在成型",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.SemiBold,
-                            color = Color.White.copy(alpha = 0.8f),
+                            color = palette.textSecondary,
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                         )
                     }
                 }
                 Surface(
                     shape = RoundedCornerShape(20.dp),
-                    color = Color.White.copy(alpha = 0.08f),
-                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.14f))
+                    color = palette.secondaryButtonContainer,
+                    border = BorderStroke(1.dp, palette.glassBorderMedium)
                 ) {
                     Text(
                         text = "已选 $selectedCount",
                         fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold,
-                        color = Color.White,
+                        color = palette.textPrimary,
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
                     )
                 }
@@ -895,7 +1016,7 @@ private fun PersonaHeroCard(
                     text = "点一点标签，下面会实时组合出你的个人风格预览。",
                     fontSize = 15.sp,
                     fontWeight = FontWeight.SemiBold,
-                    color = Color.White,
+                    color = palette.textPrimary,
                     lineHeight = 22.sp
                 )
                 AnimatedContent(
@@ -909,7 +1030,7 @@ private fun PersonaHeroCard(
                     Text(
                         text = currentText,
                         fontSize = 13.sp,
-                        color = Color.White.copy(alpha = 0.78f),
+                        color = palette.textSecondary,
                         lineHeight = 20.sp
                     )
                 }
@@ -929,7 +1050,7 @@ private fun PersonaHeroCard(
                                 if (isActive) {
                                     personaCategories[index].accentColor.copy(alpha = 0.9f)
                                 } else {
-                                    Color.White.copy(alpha = 0.10f)
+                                    palette.glassBorderSoft
                                 }
                             )
                     )
@@ -943,7 +1064,7 @@ private fun PersonaHeroCard(
                 previewChips.forEachIndexed { index, tag ->
                     PersonaPreviewChip(
                         text = tag,
-                        accentColor = activeColors.getOrElse(index) { Color.White.copy(alpha = 0.22f) },
+                        accentColor = activeColors.getOrElse(index) { palette.chipSurface },
                         isPlaceholder = selectedTags.isEmpty()
                     )
                 }
@@ -954,17 +1075,18 @@ private fun PersonaHeroCard(
 
 @Composable
 private fun PersonaPreviewChip(text: String, accentColor: Color, isPlaceholder: Boolean) {
+    val palette = threplyPalette()
     Surface(
         shape = RoundedCornerShape(999.dp),
         color = if (isPlaceholder) {
-            Color.White.copy(alpha = 0.06f)
+            palette.chipSurface
         } else {
             accentColor.copy(alpha = 0.16f)
         },
         border = BorderStroke(
             width = 1.dp,
             color = if (isPlaceholder) {
-                Color.White.copy(alpha = 0.12f)
+                palette.glassBorderSoft
             } else {
                 accentColor.copy(alpha = 0.45f)
             }
@@ -973,7 +1095,7 @@ private fun PersonaPreviewChip(text: String, accentColor: Color, isPlaceholder: 
         Text(
             text = text,
             fontSize = 12.sp,
-            color = Color.White.copy(alpha = if (isPlaceholder) 0.72f else 0.92f),
+            color = if (isPlaceholder) palette.textSecondary else palette.textPrimary,
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
         )
     }
@@ -984,123 +1106,109 @@ private fun PersonaPreviewChip(text: String, accentColor: Color, isPlaceholder: 
 private fun PersonaCategoryCard(
     category: PersonaCategory,
     selectedCount: Int,
-    orderIndex: Int,
     chips: @Composable FlowRowScope.() -> Unit
 ) {
-    var visible by remember { mutableStateOf(false) }
+    val palette = threplyPalette()
     val borderColor by animateColorAsState(
         targetValue = if (selectedCount > 0) {
             category.accentColor.copy(alpha = 0.42f)
         } else {
-            Color.White.copy(alpha = 0.12f)
+            palette.glassBorderSoft
         },
         animationSpec = tween(240),
         label = "personaCardBorder"
     )
-
-    LaunchedEffect(Unit) {
-        delay(80L + orderIndex * 65L)
-        visible = true
-    }
-
-    AnimatedVisibility(
-        visible = visible,
-        enter = fadeIn(tween(260)) + slideInVertically(initialOffsetY = { it / 5 }),
-        exit = ExitTransition.None
-    ) {
-        val shape = RoundedCornerShape(24.dp)
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(shape)
-                .background(
-                    brush = Brush.verticalGradient(
-                        colors = listOf(
-                            category.accentColor.copy(alpha = if (selectedCount > 0) 0.14f else 0.08f),
-                            Color.White.copy(alpha = 0.05f),
-                            Color.Transparent
-                        )
+    val shape = RoundedCornerShape(24.dp)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(
+                brush = Brush.verticalGradient(
+                    colors = listOf(
+                        category.accentColor.copy(alpha = if (selectedCount > 0) 0.14f else 0.08f),
+                        palette.chipSurface,
+                        Color.Transparent
                     )
                 )
-                .border(1.dp, borderColor, shape)
-                .padding(18.dp)
-                .animateContentSize(),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+            )
+            .border(1.dp, borderColor, shape)
+            .padding(18.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.Top
         ) {
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Top
+                modifier = Modifier.weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    modifier = Modifier.weight(1f),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                Box(
+                    modifier = Modifier
+                        .size(38.dp)
+                        .clip(CircleShape)
+                        .background(category.accentColor.copy(alpha = 0.18f))
+                        .border(1.dp, category.accentColor.copy(alpha = 0.28f), CircleShape),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(38.dp)
-                            .clip(CircleShape)
-                            .background(category.accentColor.copy(alpha = 0.18f))
-                            .border(1.dp, category.accentColor.copy(alpha = 0.28f), CircleShape),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = category.icon,
-                            contentDescription = null,
-                            tint = category.accentColor,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(
-                            text = category.title,
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = Color.White
-                        )
-                        Text(
-                            text = category.subtitle,
-                            fontSize = 12.sp,
-                            color = Color.White.copy(alpha = 0.62f),
-                            lineHeight = 18.sp
-                        )
-                    }
-                }
-
-                Surface(
-                    shape = RoundedCornerShape(999.dp),
-                    color = if (selectedCount > 0) {
-                        category.accentColor.copy(alpha = 0.18f)
-                    } else {
-                        Color.White.copy(alpha = 0.06f)
-                    },
-                    border = BorderStroke(
-                        1.dp,
-                        if (selectedCount > 0) {
-                            category.accentColor.copy(alpha = 0.35f)
-                        } else {
-                            Color.White.copy(alpha = 0.12f)
-                        }
+                    Icon(
+                        imageVector = category.icon,
+                        contentDescription = null,
+                        tint = category.accentColor,
+                        modifier = Modifier.size(18.dp)
                     )
-                ) {
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(
-                        text = if (selectedCount > 0) "已选 $selectedCount" else "任选",
-                        fontSize = 11.sp,
+                        text = category.title,
+                        fontSize = 15.sp,
                         fontWeight = FontWeight.SemiBold,
-                        color = Color.White.copy(alpha = 0.86f),
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
+                        color = palette.textPrimary,
+                    )
+                    Text(
+                        text = category.subtitle,
+                        fontSize = 12.sp,
+                        color = palette.textSecondary,
+                        lineHeight = 18.sp
                     )
                 }
             }
 
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-                modifier = Modifier.fillMaxWidth(),
-                content = chips
-            )
+            Surface(
+                shape = RoundedCornerShape(999.dp),
+                color = if (selectedCount > 0) {
+                    category.accentColor.copy(alpha = 0.18f)
+                } else {
+                    palette.chipSurface
+                },
+                border = BorderStroke(
+                    1.dp,
+                    if (selectedCount > 0) {
+                        category.accentColor.copy(alpha = 0.35f)
+                    } else {
+                        palette.glassBorderSoft
+                    }
+                )
+            ) {
+                Text(
+                    text = if (selectedCount > 0) "已选 $selectedCount" else "任选",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = palette.textPrimary,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
+                )
+            }
         }
+
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.fillMaxWidth(),
+            content = chips
+        )
     }
 }
 
@@ -1109,9 +1217,9 @@ private fun PersonaChip(
     text: String,
     accentColor: Color,
     isSelected: Boolean,
-    enterDelayMillis: Int,
     onClick: () -> Unit
 ) {
+    val palette = threplyPalette()
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
     val shape = RoundedCornerShape(20.dp)
@@ -1133,112 +1241,97 @@ private fun PersonaChip(
         targetValue = if (isSelected) {
             accentColor.copy(alpha = 0.78f)
         } else {
-            Color.White.copy(alpha = 0.14f)
+            palette.glassBorderMedium
         },
         animationSpec = tween(220),
         label = "personaChipBorder"
     )
     val textColor by animateColorAsState(
-        targetValue = if (isSelected) Color.White else Color.White.copy(alpha = 0.82f),
+        targetValue = if (isSelected) palette.textPrimary else palette.textSecondary,
         animationSpec = tween(220),
         label = "personaChipText"
     )
-    var visible by remember { mutableStateOf(false) }
-
-    LaunchedEffect(Unit) {
-        delay(enterDelayMillis.toLong())
-        visible = true
-    }
-
-    AnimatedVisibility(
-        visible = visible,
-        enter = fadeIn(tween(220)) + scaleIn(initialScale = 0.92f),
-        exit = ExitTransition.None
-    ) {
-        Row(
-            modifier = Modifier
-                .scale(scale)
-                .shadow(
-                    elevation = shadowElevation,
-                    shape = shape,
-                    ambientColor = accentColor.copy(alpha = 0.28f),
-                    spotColor = accentColor.copy(alpha = 0.18f)
-                )
-                .clip(shape)
-                .background(
-                    brush = if (isSelected) {
-                        Brush.linearGradient(
-                            colors = listOf(
-                                accentColor.copy(alpha = 0.40f),
-                                accentColor.copy(alpha = 0.18f),
-                                Color.White.copy(alpha = 0.14f)
-                            )
-                        )
-                    } else {
-                        Brush.linearGradient(
-                            colors = listOf(
-                                Color.White.copy(alpha = 0.08f),
-                                Color.White.copy(alpha = 0.05f)
-                            )
-                        )
-                    }
-                )
-                .border(1.dp, borderColor, shape)
-                .clickable(
-                    interactionSource = interactionSource,
-                    indication = LocalIndication.current,
-                    onClick = onClick
-                )
-                .padding(horizontal = 14.dp, vertical = 10.dp)
-                .animateContentSize(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            AnimatedVisibility(
-                visible = isSelected,
-                enter = fadeIn(tween(160)) + expandHorizontally(expandFrom = Alignment.Start),
-                exit = fadeOut(tween(120)) + shrinkHorizontally(shrinkTowards = Alignment.Start)
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Filled.Check,
-                        contentDescription = null,
-                        tint = Color.White,
-                        modifier = Modifier.size(14.dp)
-                    )
-                    Spacer(Modifier.width(6.dp))
-                }
-            }
-            Text(
-                text = text,
-                fontSize = 13.sp,
-                color = textColor,
-                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium
+    Row(
+        modifier = Modifier
+            .scale(scale)
+            .shadow(
+                elevation = shadowElevation,
+                shape = shape,
+                ambientColor = accentColor.copy(alpha = 0.28f),
+                spotColor = accentColor.copy(alpha = 0.18f)
             )
+            .clip(shape)
+            .background(
+                brush = if (isSelected) {
+                    Brush.linearGradient(
+                        colors = listOf(
+                            accentColor.copy(alpha = 0.40f),
+                            accentColor.copy(alpha = 0.18f),
+                            palette.secondaryButtonContainer
+                        )
+                    )
+                } else {
+                    Brush.linearGradient(
+                        colors = listOf(
+                            palette.secondaryButtonContainer,
+                            palette.chipSurface,
+                        )
+                    )
+                }
+            )
+            .border(1.dp, borderColor, shape)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = LocalIndication.current,
+                onClick = onClick
+            )
+            .padding(horizontal = 14.dp, vertical = 10.dp)
+            .animateContentSize(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        AnimatedVisibility(
+            visible = isSelected,
+            enter = fadeIn(tween(160)) + expandHorizontally(expandFrom = Alignment.Start),
+            exit = fadeOut(tween(120)) + shrinkHorizontally(shrinkTowards = Alignment.Start)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Filled.Check,
+                    contentDescription = null,
+                    tint = palette.textPrimary,
+                    modifier = Modifier.size(14.dp)
+                )
+                Spacer(Modifier.width(6.dp))
+            }
         }
+        Text(
+            text = text,
+            fontSize = 13.sp,
+            color = textColor,
+            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium
+        )
     }
 }
 
 @Composable
 private fun PersonaBottomButtons(onSkip: () -> Unit, onFinish: () -> Unit) {
+    val palette = threplyPalette()
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        OutlinedButton(
-            onClick = onSkip,
-            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
-            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.35f)),
-            shape = RoundedCornerShape(16.dp),
-            modifier = Modifier.weight(1f)
-        ) {
-            Text("跳过")
+        Box(modifier = Modifier.weight(1f)) {
+            GlassPrimaryButton(
+                text = "跳过",
+                onClick = onSkip
+            )
         }
         Box(modifier = Modifier.weight(1f)) {
             GlassPrimaryButton(
                 text = "完成",
                 onClick = onFinish,
                 trailingIcon = {
-                    Icon(Icons.Filled.Check, null, tint = Color.White, modifier = Modifier.size(16.dp))
+                    Icon(Icons.Filled.Check, null, tint = palette.textPrimary, modifier = Modifier.size(16.dp))
                 }
             )
         }
