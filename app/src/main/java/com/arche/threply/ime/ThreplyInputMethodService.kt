@@ -1,5 +1,7 @@
 package com.arche.threply.ime
 
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -11,6 +13,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.text.TextUtils
 import android.util.Log
 import android.view.Gravity
@@ -59,6 +62,7 @@ import kotlinx.coroutines.launch
 class ThreplyInputMethodService : InputMethodService() {
     companion object {
         private const val TAG = "ThreplyIME"
+        private const val EXPANDED_PANEL_TOUCH_GUARD_MS = 220L
     }
 
     private enum class KeyStyle {
@@ -72,6 +76,16 @@ class ThreplyInputMethodService : InputMethodService() {
     private enum class InputLanguage {
         EN,
         ZH_PINYIN
+    }
+
+    private enum class ExpandedPanelState(
+        val targetVisible: Boolean,
+        val keepsOverlayAttached: Boolean
+    ) {
+        COLLAPSED(targetVisible = false, keepsOverlayAttached = false),
+        EXPANDING(targetVisible = true, keepsOverlayAttached = true),
+        EXPANDED(targetVisible = true, keepsOverlayAttached = true),
+        COLLAPSING(targetVisible = false, keepsOverlayAttached = true)
     }
 
     private data class KeySpec(
@@ -101,7 +115,9 @@ class ThreplyInputMethodService : InputMethodService() {
     private val englishBuffer = StringBuilder()
     private var isSkillBarVisible = false
     private var selectionTriggeredSkillBar = false
-    private var isExpandedPanelVisible = false
+    private var expandedPanelState = ExpandedPanelState.COLLAPSED
+    private var expandedPanelTransitionToken = 0
+    private var suppressExpandedCandidateClicksUntilUptimeMs = 0L
 
     private var lastSelStart = -1
     private var lastSelEnd = -1
@@ -229,6 +245,8 @@ class ThreplyInputMethodService : InputMethodService() {
         lastSelStart = -1
         lastSelEnd = -1
         pendingComposingSelectionUpdates = 0
+        expandedPanelState = ExpandedPanelState.COLLAPSED
+        suppressExpandedCandidateClicksUntilUptimeMs = 0L
 
         runCatching {
             if (PrefsManager.isImeRimeEnabled(this)) {
@@ -540,6 +558,11 @@ class ThreplyInputMethodService : InputMethodService() {
         }
 
         if (merged.isEmpty()) {
+            if (expandedPanelState != ExpandedPanelState.COLLAPSED) {
+                Log.d(TAG, "Expanded panel forced collapsed because suggestions became empty")
+                expandedPanelState = ExpandedPanelState.COLLAPSED
+                syncExpandedPanelImmediately(reason = "empty_suggestions")
+            }
             suggestionContainer.addView(createMutedHint("暂无建议"))
             return
         }
@@ -637,13 +660,13 @@ class ThreplyInputMethodService : InputMethodService() {
         val bg = GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
             cornerRadius = dp(14).toFloat()
-            setColor(if (isExpandedPanelVisible) 0xFF3D5A80.toInt() else 0xFFE5EAF3.toInt())
-            setStroke(dp(1), if (isExpandedPanelVisible) 0xFF2D4A6E.toInt() else 0xFFB5BECF.toInt())
+            setColor(if (expandedPanelState.targetVisible) 0xFF3D5A80.toInt() else 0xFFE5EAF3.toInt())
+            setStroke(dp(1), if (expandedPanelState.targetVisible) 0xFF2D4A6E.toInt() else 0xFFB5BECF.toInt())
         }
         return TextView(this).apply {
-            text = if (isExpandedPanelVisible) "⊟" else "⊞"
+            text = if (expandedPanelState.targetVisible) "⊟" else "⊞"
             textSize = 15f
-            setTextColor(if (isExpandedPanelVisible) 0xFFFFFFFF.toInt() else 0xFF3A475A.toInt())
+            setTextColor(if (expandedPanelState.targetVisible) 0xFFFFFFFF.toInt() else 0xFF3A475A.toInt())
             gravity = Gravity.CENTER
             background = bg
             setPadding(dp(10), dp(6), dp(10), dp(6))
@@ -657,20 +680,241 @@ class ThreplyInputMethodService : InputMethodService() {
 
     /** Toggles the expanded candidate grid panel. */
     private fun toggleExpandedPanel() {
-        isExpandedPanelVisible = !isExpandedPanelVisible
-        if (::expandedCandidatePanel.isInitialized) {
-            expandedCandidatePanel.visibility =
-                if (isExpandedPanelVisible) View.VISIBLE else View.GONE
+        requestExpandedPanel(
+            visible = !expandedPanelState.targetVisible,
+            animated = true,
+            reason = "tray_toggle"
+        )
+    }
+
+    private fun requestExpandedPanel(visible: Boolean, animated: Boolean, reason: String) {
+        val nextState = when {
+            visible && animated -> ExpandedPanelState.EXPANDING
+            visible -> ExpandedPanelState.EXPANDED
+            !visible && animated && expandedPanelState.keepsOverlayAttached -> ExpandedPanelState.COLLAPSING
+            else -> ExpandedPanelState.COLLAPSED
         }
-        // Hide/show keyboard rows (index 1 onwards, except the last which is expandedCandidatePanel)
-        if (::keyboardRoot.isInitialized) {
-            val lastIndex = keyboardRoot.childCount - 1
-            for (i in 1 until lastIndex) {
-                keyboardRoot.getChildAt(i)?.visibility =
-                    if (isExpandedPanelVisible) View.GONE else View.VISIBLE
+        if (nextState == expandedPanelState) {
+            Log.d(TAG, "Expanded panel no-op: state=$expandedPanelState reason=$reason")
+            return
+        }
+
+        val previousState = expandedPanelState
+        expandedPanelState = nextState
+        Log.d(
+            TAG,
+            "Expanded panel transition requested: $previousState -> $expandedPanelState, " +
+                    "reason=$reason, animated=$animated"
+        )
+        refreshSuggestionTray()
+        applyExpandedPanelState(animated = animated, reason = reason)
+    }
+
+    private fun applyExpandedPanelState(animated: Boolean, reason: String) {
+        if (!::expandedCandidatePanel.isInitialized) return
+
+        if (!animated || expandedPanelState == ExpandedPanelState.EXPANDED || expandedPanelState == ExpandedPanelState.COLLAPSED) {
+            syncExpandedPanelImmediately(reason = reason)
+            return
+        }
+
+        val panel = expandedCandidatePanel
+        val translationY = dp(14).toFloat()
+        val transitionToken = ++expandedPanelTransitionToken
+
+        panel.animate().setListener(null)
+        panel.animate().cancel()
+        panel.bringToFront()
+
+        when (expandedPanelState) {
+            ExpandedPanelState.EXPANDING -> {
+                setKeyboardRowsVisible(visible = false)
+                panel.visibility = View.VISIBLE
+                panel.alpha = 0f
+                panel.translationY = translationY
+                panel.animate()
+                    .alpha(1f)
+                    .translationY(0f)
+                    .setDuration(180L)
+                    .setListener(object : AnimatorListenerAdapter() {
+                        override fun onAnimationCancel(animation: Animator) {
+                            if (transitionToken != expandedPanelTransitionToken) return
+                            Log.d(TAG, "Expanded panel expand cancelled: reason=$reason")
+                        }
+
+                        override fun onAnimationEnd(animation: Animator) {
+                            if (transitionToken != expandedPanelTransitionToken) return
+                            if (expandedPanelState != ExpandedPanelState.EXPANDING) return
+                            expandedPanelState = ExpandedPanelState.EXPANDED
+                            resetExpandedPanelPresentation()
+                            panel.visibility = View.VISIBLE
+                            setKeyboardRowsVisible(visible = false)
+                            Log.d(TAG, "Expanded panel expanded: reason=$reason")
+                        }
+                    })
+            }
+
+            ExpandedPanelState.COLLAPSING -> {
+                setKeyboardRowsVisible(visible = false)
+                panel.visibility = View.VISIBLE
+                panel.alpha = 1f
+                panel.translationY = 0f
+                panel.animate()
+                    .alpha(0f)
+                    .translationY(translationY)
+                    .setDuration(160L)
+                    .setListener(object : AnimatorListenerAdapter() {
+                        override fun onAnimationCancel(animation: Animator) {
+                            if (transitionToken != expandedPanelTransitionToken) return
+                            Log.d(TAG, "Expanded panel collapse cancelled: reason=$reason")
+                        }
+
+                        override fun onAnimationEnd(animation: Animator) {
+                            if (transitionToken != expandedPanelTransitionToken) return
+                            if (expandedPanelState != ExpandedPanelState.COLLAPSING) return
+                            expandedPanelState = ExpandedPanelState.COLLAPSED
+                            syncExpandedPanelImmediately(reason = "$reason:end")
+                            Log.d(TAG, "Expanded panel collapsed: reason=$reason")
+                        }
+                    })
+            }
+
+            else -> Unit
+        }
+    }
+
+    private fun syncExpandedPanelImmediately(reason: String) {
+        if (!::expandedCandidatePanel.isInitialized) return
+
+        ++expandedPanelTransitionToken
+        expandedCandidatePanel.animate().setListener(null)
+        expandedCandidatePanel.animate().cancel()
+        resetExpandedPanelPresentation()
+        expandedCandidatePanel.visibility =
+            if (expandedPanelState.keepsOverlayAttached) View.VISIBLE else View.GONE
+        if (expandedPanelState.keepsOverlayAttached) {
+            expandedCandidatePanel.bringToFront()
+        } else {
+            clearExpandedPanelTransientState(reason = "$reason:collapsed")
+        }
+        setKeyboardRowsVisible(visible = !expandedPanelState.keepsOverlayAttached)
+        Log.d(TAG, "Expanded panel synced: state=$expandedPanelState reason=$reason")
+    }
+
+    private fun resetExpandedPanelPresentation() {
+        if (!::expandedCandidatePanel.isInitialized) return
+        expandedCandidatePanel.alpha = 1f
+        expandedCandidatePanel.translationY = 0f
+    }
+
+    private fun dismissExpandedPanelWithoutCommit(reason: String, animated: Boolean) {
+        if (!expandedPanelState.keepsOverlayAttached) {
+            Log.d(TAG, "Expanded panel dismiss ignored: state=$expandedPanelState reason=$reason")
+            return
+        }
+        if (expandedPanelState == ExpandedPanelState.COLLAPSING || expandedPanelState == ExpandedPanelState.COLLAPSED) {
+            Log.d(TAG, "Expanded panel dismiss re-entry ignored: state=$expandedPanelState reason=$reason")
+            return
+        }
+        suppressExpandedCandidateClicksUntilUptimeMs =
+            SystemClock.uptimeMillis() + EXPANDED_PANEL_TOUCH_GUARD_MS
+        clearExpandedPanelTransientState(reason = reason)
+        Log.d(TAG, "Expanded panel dismiss requested without commit: reason=$reason")
+        requestExpandedPanel(
+            visible = false,
+            animated = animated,
+            reason = reason
+        )
+    }
+
+    private fun shouldIgnoreExpandedCandidateTap(text: String): Boolean {
+        val now = SystemClock.uptimeMillis()
+        val suppressing = now < suppressExpandedCandidateClicksUntilUptimeMs
+        val dismissing = expandedPanelState == ExpandedPanelState.COLLAPSING ||
+                expandedPanelState == ExpandedPanelState.COLLAPSED
+        if (!suppressing && !dismissing) {
+            return false
+        }
+        Log.w(
+            TAG,
+            "Expanded candidate tap ignored: text=${text.take(20)}, suppressing=$suppressing, " +
+                    "state=$expandedPanelState"
+        )
+        return true
+    }
+
+    private fun clearExpandedPanelTransientState(reason: String) {
+        if (!::expandedCandidatePanel.isInitialized) return
+        expandedCandidatePanel.cancelPendingInputEvents()
+        clearPressedAndFocus(expandedCandidatePanel)
+        Log.d(TAG, "Expanded panel transient state cleared: reason=$reason")
+    }
+
+    private fun clearPressedAndFocus(view: View) {
+        view.isPressed = false
+        view.jumpDrawablesToCurrentState()
+        view.clearFocus()
+        if (view is ViewGroup) {
+            for (i in 0 until view.childCount) {
+                clearPressedAndFocus(view.getChildAt(i))
             }
         }
-        refreshSuggestionTray()
+    }
+
+    private fun installExpandedActionTouchHandler(
+        button: View,
+        actionName: String
+    ) {
+        button.isClickable = true
+        button.isFocusable = false
+        button.setOnTouchListener { v, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    suppressExpandedCandidateClicksUntilUptimeMs =
+                        SystemClock.uptimeMillis() + EXPANDED_PANEL_TOUCH_GUARD_MS
+                    v.parent?.requestDisallowInterceptTouchEvent(true)
+                    v.isPressed = true
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    v.isPressed = isTouchInsideView(v, event)
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    val inside = isTouchInsideView(v, event)
+                    v.isPressed = false
+                    if (inside) {
+                        Log.d(TAG, "Expanded panel action touch confirmed: action=$actionName")
+                        v.performClick()
+                    } else {
+                        Log.d(TAG, "Expanded panel action touch cancelled outside: action=$actionName")
+                    }
+                    true
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    v.isPressed = false
+                    Log.d(TAG, "Expanded panel action touch cancelled: action=$actionName")
+                    true
+                }
+                else -> false
+            }
+        }
+    }
+
+    private fun isTouchInsideView(view: View, event: MotionEvent): Boolean {
+        return event.x >= 0f && event.x <= view.width.toFloat() &&
+                event.y >= 0f && event.y <= view.height.toFloat()
+    }
+
+    private fun setKeyboardRowsVisible(visible: Boolean) {
+        if (!::keyboardRoot.isInitialized) return
+        val lastIndex = keyboardRoot.childCount - 1
+        if (lastIndex < 2) return
+        for (i in 2 until lastIndex) {
+            keyboardRoot.getChildAt(i)?.visibility = if (visible) View.VISIBLE else View.GONE
+        }
+        keyboardRoot.requestLayout()
+        keyboardRoot.invalidate()
     }
 
     /**
@@ -680,7 +924,7 @@ class ThreplyInputMethodService : InputMethodService() {
     private fun updateExpandedPanel(suggestions: List<ImeSuggestion>) {
         if (!::expandedCandidatePanel.isInitialized) return
         expandedCandidatePanel.removeAllViews()
-        if (suggestions.isEmpty() || !isExpandedPanelVisible) return
+        if (suggestions.isEmpty() || !expandedPanelState.keepsOverlayAttached) return
 
         val mainRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -731,15 +975,16 @@ class ThreplyInputMethodService : InputMethodService() {
                     marginEnd = dp(4)
                 }
                 setOnClickListener {
-                    isExpandedPanelVisible = false
-                    expandedCandidatePanel.visibility = View.GONE
-                    // Restore keyboard rows
-                    if (::keyboardRoot.isInitialized) {
-                        val lastIndex = keyboardRoot.childCount - 1
-                        for (i in 1 until lastIndex) {
-                            keyboardRoot.getChildAt(i)?.visibility = View.VISIBLE
-                        }
+                    if (shouldIgnoreExpandedCandidateTap(suggestion.text)) {
+                        return@setOnClickListener
                     }
+                    Log.d(TAG, "Expanded candidate clicked: index=$index text=${suggestion.text.take(20)}")
+                    clearExpandedPanelTransientState(reason = "expanded_candidate_commit")
+                    requestExpandedPanel(
+                        visible = false,
+                        animated = false,
+                        reason = "expanded_candidate_commit"
+                    )
                     commitSuggestion(suggestion.text)
                 }
             }
@@ -764,9 +1009,23 @@ class ThreplyInputMethodService : InputMethodService() {
         }
 
         val actionButtons = listOf(
-            Triple("返回", "↵") { handleEnter() },
-            Triple("删除", "⌫") { handleBackspace() },
-            Triple("收起", "⊟") { toggleExpandedPanel() }
+            Triple("返回", "←") {
+                dismissExpandedPanelWithoutCommit(
+                    reason = "expanded_action_back",
+                    animated = true
+                )
+            },
+            Triple("删除", "⌫") {
+                clearExpandedPanelTransientState(reason = "expanded_action_backspace")
+                Log.d(TAG, "Expanded panel delete pressed")
+                handleBackspace()
+            },
+            Triple("收起", "⊟") {
+                dismissExpandedPanelWithoutCommit(
+                    reason = "expanded_action_collapse",
+                    animated = true
+                )
+            }
         )
 
         actionButtons.forEach { (label, icon, action) ->
@@ -785,8 +1044,12 @@ class ThreplyInputMethodService : InputMethodService() {
                     0,
                     1f
                 ).apply { bottomMargin = dp(6) }
-                setOnClickListener { action() }
+                setOnClickListener {
+                    Log.d(TAG, "Expanded panel action clicked: label=$label state=$expandedPanelState")
+                    action()
+                }
             }
+            installExpandedActionTouchHandler(btn, actionName = label)
             val iconView = TextView(this).apply {
                 text = icon
                 textSize = 20f
@@ -1082,6 +1345,11 @@ class ThreplyInputMethodService : InputMethodService() {
     }
 
     private fun commitSuggestion(text: String) {
+        Log.d(
+            TAG,
+            "Committing suggestion: text=${text.take(20)}, expandedState=$expandedPanelState, " +
+                    "hasPinyin=${pinyinComposer.currentRaw().isNotBlank()}"
+        )
         HapticsUtil.impactMedium(this)
         if (inputLanguage == InputLanguage.ZH_PINYIN && pinyinComposer.currentRaw().isNotBlank()) {
             pinyinComposer.clear()
@@ -1580,6 +1848,7 @@ class ThreplyInputMethodService : InputMethodService() {
             keyboardRoot.removeView(expandedCandidatePanel)
         }
         keyboardRoot.addView(expandedCandidatePanel)
+        syncExpandedPanelImmediately(reason = "rebuild_keyboard")
     }
 
     private fun addStandardRow(
@@ -2025,6 +2294,11 @@ class ThreplyInputMethodService : InputMethodService() {
     }
 
     private fun handleEnter() {
+        Log.d(
+            TAG,
+            "Handle enter invoked: expandedState=$expandedPanelState, " +
+                    "hasPinyin=${pinyinComposer.currentRaw().isNotBlank()}"
+        )
         if (inputLanguage == InputLanguage.ZH_PINYIN && pinyinComposer.currentRaw().isNotBlank()) {
             val candidate = bestPinyinCandidateForCommit()
                 ?: pinyinComposer.currentRaw()
